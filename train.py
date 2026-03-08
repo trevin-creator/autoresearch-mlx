@@ -375,7 +375,8 @@ FINAL_LR_FRAC = 0.0
 # Model size
 DEPTH = 4
 DEVICE_BATCH_SIZE = 16
-FINAL_EVAL_BATCH_SIZE = 256
+# Keep eval memory conservative enough for 16 GB Apple Silicon Macs.
+FINAL_EVAL_BATCH_SIZE = 128
 STARTUP_EXCLUDE_STEPS = 1
 
 

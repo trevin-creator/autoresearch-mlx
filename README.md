@@ -18,12 +18,14 @@ uv sync
 # Download data and train tokenizer (one-time)
 uv run prepare.py
 
-# Run a single training experiment (~7 min including compile + eval)
+# Run a single training experiment
 uv run train.py
 
 # Start autonomous research
 # Point Claude Code (or any agent) at program.md and let it go
 ```
+
+The checked-in defaults aim to fit 16 GB Apple Silicon Macs by keeping `FINAL_EVAL_BATCH_SIZE` conservative. If you have more unified memory and want faster evaluation, raise that value in `train.py`.
 
 ## How it works
 
@@ -52,8 +54,8 @@ Key finding: Apple Silicon throughput in a 5-minute window favors smaller, faste
 
 - **MLX instead of PyTorch/CUDA.** Native Apple Silicon, unified memory.
 - **AdamW only.** Muon optimizer port is future work.
-- **Smaller eval token budget.** Reduced for faster iteration (~52s eval vs ~11min on full budget). Same `evaluate_bpb` function from `prepare.py`.
-- **~7 min experiment cycle.** 5 min training + ~11s compile + ~52s eval. Expect ~8-9 experiments/hour, ~70 overnight.
+- **Smaller eval token budget.** Reduced for faster iteration, while still using the same `evaluate_bpb` function from `prepare.py`.
+- **16 GB-safe default eval batch.** The checked-in `FINAL_EVAL_BATCH_SIZE` is conservative enough for lower-memory Apple Silicon Macs; larger-memory machines can increase it for faster evaluation.
 - **MFU reporting is placeholder.** No Apple Silicon FLOPs benchmark exists equivalent to H100_BF16_PEAK_FLOPS. `peak_vram_mb` reports MLX unified memory via `mx.metal.get_peak_memory()`.
 
 ## Acknowledgments
