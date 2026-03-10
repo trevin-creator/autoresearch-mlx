@@ -2,146 +2,77 @@
 
 Apple Silicon (MLX) port of [Karpathy's autoresearch](https://github.com/karpathy/autoresearch).
 
-Full credit to [@karpathy](https://github.com/karpathy) for the core idea: fixed-time autonomous research loops controlled entirely through `program.md`. This fork preserves every design rule — 5-minute wall-clock budget, single mutable `train.py`, one metric (`val_bpb`), keep/revert via git — and runs natively on Apple Silicon via [MLX](https://github.com/ml-explore/mlx). No PyTorch or CUDA required.
+Full credit to [@karpathy](https://github.com/karpathy) for the core idea: fixed-time autonomous research loops controlled through `program.md`. This port keeps the same basic rules: one mutable `train.py`, one metric (`val_bpb`), a fixed 5-minute training budget, and keep-or-revert via git. It runs natively on Apple Silicon through [MLX](https://github.com/ml-explore/mlx), so there is no PyTorch or CUDA dependency.
 
 ## Quick start
 
-Requirements: Apple Silicon Mac (M1/M2/M3/M4), Python 3.10+, uv.
+Requirements: Apple Silicon Mac, Python 3.10+, [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Install uv (if needed)
+# install uv if needed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
+# install dependencies
 uv sync
 
-# Download data and train tokenizer (one-time)
+# one-time data + tokenizer prep
 uv run prepare.py
 
-# Run a single training experiment (~7 min including compile + eval)
-uv run train.py
-
-# Start autonomous research
-# Point Claude Code (or any agent) at program.md and let it go
-```
-
-## How it works
-
-Same as the original. Three files that matter:
-
-- **`prepare.py`** — data prep, tokenizer, dataloader, evaluation. Not modified.
-- **`train.py`** — model, optimizer, training loop. The agent edits this.
-- **`program.md`** — agent instructions. Point your agent here.
-
-The agent reads `program.md`, modifies `train.py`, runs a 5-minute experiment, checks `val_bpb`, and commits or reverts. Repeat overnight. Wake up to results.
-
-## Results on M1 Mac Studio (48GB)
-
-Starting from the upstream default configuration and running the autoresearch loop:
-
-| Experiment | Change | val_bpb | Action |
-|---|---|---|---|
-| baseline | default config | 2.667 | keep |
-| 1 | halve batch size | 2.589 | keep |
-| 2 | 10x matrix LR | 2.534 | keep |
-| 3 | depth 8 → 4 | 1.808 | keep |
-
-Key finding: Apple Silicon throughput in a 5-minute window favors smaller, faster-training models. The autoresearch loop discovered this automatically — more optimizer steps beat more parameters when compute time is fixed.
-
-## Differences from upstream
-
-- **MLX instead of PyTorch/CUDA.** Native Apple Silicon, unified memory.
-- **AdamW only.** Muon optimizer port is future work.
-- **Smaller eval token budget.** Reduced for faster iteration (~52s eval vs ~11min on full budget). Same `evaluate_bpb` function from `prepare.py`.
-- **~7 min experiment cycle.** 5 min training + ~11s compile + ~52s eval. Expect ~8-9 experiments/hour, ~70 overnight.
-- **MFU reporting is placeholder.** No Apple Silicon FLOPs benchmark exists equivalent to H100_BF16_PEAK_FLOPS. `peak_vram_mb` reports MLX unified memory via
--
-- # autoresearch-mlx
-
-Apple Silicon (MLX) port of [Karpathy's autoresearch](https://github.com/karpathy/autoresearch).
-
-Full credit to [@karpathy](https://github.com/karpathy) for the core idea: fixed-time autonomous research loops controlled entirely through `program.md`. This fork preserves every design rule — 5-minute wall-clock budget, single mutable `train.py`, one metric (`val_bpb`), keep/revert via git — and runs natively on Apple Silicon via [MLX](https://github.com/ml-explore/mlx). No PyTorch or CUDA required.
-
-## Quick start
-
-Requirements: Apple Silicon Mac (M1/M2/M3/M4), Python 3.10+, uv.
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
-uv run prepare.py
+# run one 5-minute training experiment
 uv run train.py
 ```
 
-Then point Claude Code (or any agent) at `program.md` and let it go.
+Then point Claude Code or another coding agent at `program.md` and let it run the loop.
 
-## Overnight Results
+## What matters
 
-Three machines ran autonomously for 6-12 hours, each discovering its own optimal configuration.
+- `prepare.py` - data prep, tokenizer, dataloader, and evaluation. Treat as fixed.
+- `train.py` - model, optimizer, and training loop. This is the file the agent edits.
+- `program.md` - the autonomous experiment protocol.
+- `results.tsv` - logged experiment history.
 
-| Machine | Optimizer | Experiments | Best val_bpb | Improvement |
-|---|---|---|---|---|
-| M4 Max 128GB | AdamW | ~50 | **1.295** | 19% |
-| M4 Max 128GB (#2) | AdamW + surface gates | ~30 | 1.339 | 17% |
-| Mac Mini | Muon + AdamW | 30 | 1.462 | 24% |
+The loop is the same as upstream: edit `train.py`, run a fixed-budget experiment, read `val_bpb`, keep the change if it wins, revert if it loses, and repeat.
 
-Upstream H100 reference: val_bpb 0.998 in the same 5-minute budget.
+## Public baseline results
 
-### What the Loop Found
+The public `results.tsv` captures the initial hardware-local walk from the default baseline down to `1.807902`:
 
-Every machine converged on the same core insight: in a fixed 5-minute window, more optimizer steps beats more parameters.
+| Commit | val_bpb | Status | Description |
+|---|---:|---|---|
+| `383abb4` | 2.667000 | keep | baseline (AdamW, default config) |
+| `909dd59` | 2.588904 | keep | halve total batch size to `2^16` |
+| `4161af3` | 2.533728 | keep | increase matrix LR to `0.04` |
+| `5efc7aa` | 1.807902 | keep | reduce depth from `8` to `4` |
 
-- **DEPTH=4 over DEPTH=8.** Half the parameters, roughly 2x the training steps. All three machines converged here.
-- **Smaller batch sizes.** TOTAL_BATCH_SIZE 2^14-2^13 consistently beat 2^17 by fitting more steps into the budget.
-- **Lean MLP.** 3x expansion beat 4x. On the Mac Mini, 2x worked better.
-- **Schedule tuning matters.** WARMDOWN_RATIO and FINAL_LR_FRAC were significant on all machines.
+That result already shows the core Apple Silicon pattern: with a fixed 5-minute wall clock, smaller faster-training models can beat larger ones simply by fitting more optimizer steps into the budget.
 
-**Muon on Apple Silicon (first-ever tuning):**
+## Longer Apple Silicon runs
 
-- **NS_STEPS=3 beats NS_STEPS=5.** Fewer Newton-Schulz iterations means faster steps means more total steps.
-- **Muon is hardware-dependent.** On the Mac Mini (constrained compute), Muon was the early breakthrough. On the M4 Max, plain AdamW with more steps still won. Muon makes each step count more — which matters most when you can't get many steps.
+Longer overnight runs on the working MLX port pushed much further. The long Mac Mini test is included here because it found a meaningfully different winner stack from the Max-class machines.
 
-The most interesting result: the same loop, given different hardware, found genuinely different optimal configurations. That's exactly what autoresearch is designed to do.
+| Machine | Current best | Starting point | Repeated wins |
+|---|---:|---:|---|
+| M4 Max #1 | 1.294526 | 1.596971 | AdamW-only, low matrix LR, 3x MLP, no logit cap, moderate weight decay |
+| M4 Max #2 | 1.330509 | 1.807902 | leaner batch, long anneal, SiLU, lower regularization, no logit cap |
+| Mac Mini (long run) | 1.353329 | 1.922472 | Muon, sharper attention, smaller MLP, lower scalar LR |
 
-## How it works
-
-Three files that matter:
-
-- **`prepare.py`** — data prep, tokenizer, dataloader, evaluation. Not modified.
-- **`train.py`** — model, optimizer, training loop. The agent edits this. Includes optional Muon with tunable knobs.
-- **`program.md`** — agent instructions. Point your agent here.
+The Mac Mini result matters because it did not just rediscover the same exact recipe. On smaller Apple Silicon hardware, the strongest changes leaned toward more aggressive step-efficiency wins. Later transfer tests showed some of those Mac Mini findings did not carry cleanly onto the Max baseline, which is exactly the kind of hardware-specific behavior this loop is useful for uncovering.
 
 ## Differences from upstream
 
-- **MLX instead of PyTorch/CUDA.** Native Apple Silicon, unified memory.
-- **Muon included.** Set `USE_MUON = True` to enable. Recommended for memory-constrained hardware.
-- **Smaller eval token budget.** ~52s eval for faster iteration.
-- **~6-7 min experiment cycle.** 8-9 experiments/hour, 60-80 overnight.
-
-## Recommended Defaults
-
-Based on overnight results across three machines:
-
-```python
-DEPTH = 4
-TOTAL_BATCH_SIZE = 2**14
-MLP_EXPANSION = 3
-WARMDOWN_RATIO = 0.3
-FINAL_LR_FRAC = 0.1
-USE_MUON = False          # True for constrained hardware
-NS_STEPS = 3              # if using Muon
-```
-
-Starting points. The loop will find better settings for your hardware.
-
+- **MLX instead of PyTorch/CUDA.** Native Apple Silicon training with unified memory.
+- **AdamW-only public path.** This public `train.py` keeps the default path simple. The long Mac Mini run above explored a Muon variant in the working port, but that branch is not exposed as a public default here.
+- **Smaller eval token budget.** Reduced for faster iteration on Apple Silicon while keeping the same `evaluate_bpb` interface in `prepare.py`.
+- **Roughly 6-7 minutes per experiment.** Expect 5 minutes of training plus compile and eval overhead.
+- **MFU reporting is placeholder.** There is no Apple Silicon equivalent to the H100 FLOPs reference used upstream.
 
 ## Acknowledgments
 
-- [Andrej Karpathy](https://github.com/karpathy) — autoresearch and nanochat
-- [scasella/nanochat-mlx](https://github.com/scasella/nanochat-mlx) — MLX GPT and optimizer reference
-- [awni/picochat](https://github.com/awni/picochat) — MLX training patterns
+- [Andrej Karpathy](https://github.com/karpathy) - autoresearch and nanochat
+- [scasella/nanochat-mlx](https://github.com/scasella/nanochat-mlx) - MLX GPT and optimizer reference
+- [awni/picochat](https://github.com/awni/picochat) - MLX training patterns
 - [Apple MLX team](https://github.com/ml-explore/mlx)
 
 ## License
 
-MIT. Original copyright preserved. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
