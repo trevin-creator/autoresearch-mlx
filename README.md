@@ -84,6 +84,7 @@ Three machines ran autonomously for 6-12 hours, each discovering its own optimal
 | M4 Max 128GB | AdamW | ~50 | **1.295** | 19% |
 | M4 Max 128GB (#2) | AdamW + surface gates | ~30 | 1.339 | 17% |
 | Mac Mini | Muon + AdamW | 30 | 1.462 | 24% |
+| M3 Max 48GB | Muon + AdamW + SwiGLU | ~110 | **1.2809** | 27% (M3 baseline 1.764) |
 
 Upstream H100 reference: val_bpb 0.998 in the same 5-minute budget.
 
