@@ -1,4 +1,5 @@
 commit	val_bpb	memory_gb	status	description
 abd9f6b	2.126246	21.2	keep	baseline
 f45a606	2.506772	23.2	discard	increase depth from 4 to 6
-377e52f	1.908023	21.2	keep	halve batch size to 2^15
+ef7002d	1.908023	21.2	keep	halve batch size to 2^15
+e17f1a8	1.747741	21.2	keep	halve batch size to 2^14 with device batch 8
