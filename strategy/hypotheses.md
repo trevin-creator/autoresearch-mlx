@@ -11,6 +11,7 @@ Each entry tracks: the hypothesis, expected mechanism, dependencies, and status.
 - **Change**: MATRIX_LR from 0.04 → 0.03 (or 0.025)
 - **Rationale**: We proved higher LR (0.06) hurts at batch=2^14. Linear scaling rule suggests optimal LR scales with sqrt(batch_size), so halving batch from 2^16 to 2^14 suggests ~0.7x LR → ~0.028. Current 0.04 may be slightly above optimal.
 - **Risk**: Low — small change, easy to interpret
+- **Approach**: Sequential binary search — try 0.03 first, then narrow based on result. Each LR test costs ~7 min, so budget 2-3 runs for this sweep.
 - **Status**: Untested
 - **Priority**: HIGH
 
@@ -51,7 +52,7 @@ Each entry tracks: the hypothesis, expected mechanism, dependencies, and status.
 ### H7: SwiGLU + wider model bundle
 - **Change**: SwiGLU activation + ASPECT_RATIO=96 (→ model_dim=384) + DEPTH=4 + adjusted LR
 - **Rationale**: SwiGLU alone failed partly because model_dim=256 may be too narrow for gating to help. At dim=384 with SwiGLU's 8/3x hidden (=1024), the MLP has more capacity. Needs LR re-tuning since architecture is very different.
-- **Risk**: High — multiple interacting changes, may need LR sweep
+- **Risk**: High — multiple interacting changes, may need sequential LR sweep (2-3 extra runs at ~7 min each)
 - **Dependencies**: Should try H1 (LR tuning) first to establish LR sensitivity
 - **Status**: Untested
 - **Priority**: LOW (save for later)

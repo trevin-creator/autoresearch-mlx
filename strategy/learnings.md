@@ -5,6 +5,12 @@ Updated after every experiment. Each entry explains *why* something worked or di
 
 ---
 
+## Single-machine, sequential-only constraint (hard constraint)
+
+All experiments run on one M4 Max laptop. No parallel training jobs — concurrent runs produce incomparable results due to GPU contention and non-deterministic scheduling. This means every experiment costs ~7 minutes of wall time with no shortcut. The strategy knowledge base exists specifically to compensate: invest thinking time (consulting hypotheses, interactions, near-misses) to make each of those 7-minute slots count. Bad experiment picks are the main bottleneck, not compute.
+
+---
+
 ## Step-count dominance (high confidence)
 
 This model is **step-count-limited**, not gradient-quality-limited. On this hardware (M4 Max), reducing batch size from 2^16 → 2^15 → 2^14 gave the two largest improvements in the entire run (1.623 → 1.540 → 1.402). The model is small enough (~11.5M params) that each forward/backward pass is fast, so more optimizer steps per 5-minute budget wins.

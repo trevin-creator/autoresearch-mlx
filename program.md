@@ -133,13 +133,25 @@ Beyond the basic greedy single-change search, use these strategies to explore th
 
 **Synergy bundles**: When two changes have a theoretical reason to interact positively, test them together. If the bundle wins, you can optionally ablate later to understand which part mattered. If the bundle loses, the individual changes may still be worth testing alone.
 
-**LR sweep sub-loop**: After any architecture change (depth, width, activation function), do a quick LR binary search (try 0.5x and 1.5x of current) before declaring the architecture change a loss. Many architecture changes only fail because the LR wasn't re-tuned.
+**LR sweep sub-loop**: After any architecture change (depth, width, activation function), do a sequential LR binary search before declaring the architecture change a loss. Try 0.5x first, then 1.5x (or narrow based on the first result). This costs 2-3 extra runs (~15-20 minutes) but prevents false negatives from LR mismatch. Many architecture changes only fail because the LR wasn't re-tuned.
 
 **Revisit near-misses**: After every 3-4 experiments, scan the near-misses list. If the config has shifted significantly since a near-miss was tested, re-test it. The same change can flip from loss to win in a different context.
 
 **Controlled regressions**: If a change opens a known optimization pathway (e.g., SwiGLU enables different MLP ratios), accept a small regression (~0.005) and immediately test the follow-up. Mark this explicitly in results.tsv as "regression accepted: <reason>".
 
 **Diminishing returns detection**: If the last 5+ experiments are all discards with results within 0.01 of the best, you've likely reached a local optimum at this architecture scale. Time to try something more radical (different depth, different optimizer, major architectural change).
+
+### Single-machine constraint: no parallel experiments
+
+All experiments run sequentially on a single Apple Silicon machine. Do NOT attempt to run multiple training jobs concurrently. The reasons:
+
+1. **Incomparable results**: `TIME_BUDGET` is wall-clock time. Concurrent jobs share GPU compute and memory bandwidth, so each gets fewer steps in the same wall-clock window. Results would not be comparable to sequential baselines.
+2. **Unfair scheduling**: MLX GPU scheduling across concurrent processes is not deterministic. One job may get 40% of compute while another gets 25%, making even relative comparisons between parallel runs unreliable.
+3. **Memory pressure**: Training already uses ~21GB of unified memory. Multiple instances risk bandwidth contention and OOM.
+
+The strategy knowledge base compensates for the lack of parallelism by making each sequential experiment pick smarter — consult hypotheses, interactions, and near-misses before every run rather than brute-forcing the search space.
+
+If multi-machine access becomes available in the future, parallel triage (running 2-3 variants simultaneously for directional signal, then confirming the winner sequentially) becomes viable. Until then, invest thinking time, not compute time.
 
 ### Loop discipline
 
