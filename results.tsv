@@ -1,5 +1,14 @@
-commit	val_bpb	memory_gb	status	description
-abd9f6b	2.126246	21.2	keep	baseline
-f45a606	2.506772	23.2	discard	increase depth from 4 to 6
-ef7002d	1.908023	21.2	keep	halve batch size to 2^15
-e17f1a8	1.747741	21.2	keep	halve batch size to 2^14 with device batch 8
+commit	val_bpb	memory_gb	diff_lines	status	description	reject_reason
+abd9f6b	2.126246	21.2	0	keep	baseline	-
+f45a606	2.506772	23.2	2	discard	increase depth from 4 to 6	worse bpb (too few steps)
+ef7002d	1.908023	21.2	2	keep	halve batch size to 2^15	-
+3d05a39	1.747741	21.2	4	keep	halve batch size to 2^14 with device batch 8	-
+3f4ae75	1.658510	21.2	4	keep	batch size 2^13 with device batch 4	-
+b206718	1.693191	21.2	4	discard	batch size 2^12 with device batch 2	worse bpb (gradient noise)
+c71c8af	1.825106	23.1	2	discard	increase depth from 4 to 5	worse bpb (too few steps)
+8f99e55	1.699902	21.2	2	discard	increase matrix LR to 0.08	worse bpb (LR too high)
+0431a21	1.691105	21.2	2	discard	add 10% warmup ratio	worse bpb (wasted budget)
+b86c9ea	1.675326	21.2	2	discard	reduce warmdown ratio from 0.5 to 0.3	worse bpb
+32a9a4c	1.691530	21.9	11	discard	replace ReLU^2 MLP with SwiGLU	worse bpb (hidden dim too small at this scale)
+ed4afc2	1.666373	21.2	2	discard	increase embedding LR from 0.6 to 1.2	worse bpb
+a0db2ae	1.716732	21.2	2	discard	reduce HEAD_DIM from 128 to 64 (4 heads)	worse bpb (fewer steps)
