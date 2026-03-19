@@ -34,11 +34,6 @@ def norm(x):
     return x * mx.rsqrt(mx.mean(x * x, axis=-1, keepdims=True) + 1e-5)
 
 
-def has_ve(layer_idx, n_layer):
-    """Returns True if layer should have Value Embedding (alternating, last always included)."""
-    return layer_idx % 2 == (n_layer - 1) % 2
-
-
 def create_additive_causal_mask(seq_len, dtype=mx.float32):
     indices = mx.arange(seq_len)
     blocked = indices[None, :] > indices[:, None]
@@ -70,24 +65,13 @@ class CausalSelfAttention(nn.Module):
         self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.ve_gate_channels = 32
-        self.ve_gate = (
-            nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False)
-            if has_ve(layer_idx, config.n_layer)
-            else None
-        )
         self.rope = nn.RoPE(self.head_dim, traditional=True, base=10000)
 
-    def __call__(self, x, ve, mask):
+    def __call__(self, x, mask):
         batch_size, seq_len, _ = x.shape
         q = self.c_q(x).reshape(batch_size, seq_len, self.n_head, self.head_dim)
         k = self.c_k(x).reshape(batch_size, seq_len, self.n_kv_head, self.head_dim)
         v = self.c_v(x).reshape(batch_size, seq_len, self.n_kv_head, self.head_dim)
-
-        if ve is not None and self.ve_gate is not None:
-            ve = ve.reshape(batch_size, seq_len, self.n_kv_head, self.head_dim)
-            gate = 2 * mx.sigmoid(self.ve_gate(x[..., : self.ve_gate_channels]))
-            v = v + mx.expand_dims(gate, axis=-1) * ve
 
         q = q.transpose(0, 2, 1, 3)
         k = k.transpose(0, 2, 1, 3)
@@ -120,8 +104,8 @@ class Block(nn.Module):
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
 
-    def __call__(self, x, ve, mask):
-        x = x + self.attn(norm(x), ve, mask)
+    def __call__(self, x, mask):
+        x = x + self.attn(norm(x), mask)
         x = x + self.mlp(norm(x))
         return x
 
@@ -136,13 +120,6 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.resid_lambdas = mx.ones((config.n_layer,), dtype=mx.float32)
         self.x0_lambdas = mx.zeros((config.n_layer,), dtype=mx.float32)
-        head_dim = config.n_embd // config.n_head
-        kv_dim = config.n_kv_head * head_dim
-        self.value_embeds = {
-            str(i): nn.Embedding(config.vocab_size, kv_dim)
-            for i in range(config.n_layer)
-            if has_ve(i, config.n_layer)
-        }
         self._mask_cache = {}
 
     def init_weights(self):
@@ -159,14 +136,9 @@ class GPT(nn.Module):
             block.attn.c_proj.weight = mx.zeros_like(block.attn.c_proj.weight).astype(mx.bfloat16)
             block.mlp.c_fc.weight = mx.random.uniform(-scale, scale, block.mlp.c_fc.weight.shape).astype(mx.bfloat16)
             block.mlp.c_proj.weight = mx.zeros_like(block.mlp.c_proj.weight).astype(mx.bfloat16)
-            if block.attn.ve_gate is not None:
-                block.attn.ve_gate.weight = mx.zeros_like(block.attn.ve_gate.weight).astype(mx.bfloat16)
 
         self.resid_lambdas = mx.ones((self.config.n_layer,), dtype=mx.float32)
         self.x0_lambdas = mx.full((self.config.n_layer,), 0.1, dtype=mx.float32)
-
-        for ve in self.value_embeds.values():
-            ve.weight = mx.random.uniform(-scale, scale, ve.weight.shape).astype(mx.bfloat16)
 
     def _compute_window_sizes(self, config):
         pattern = config.window_pattern.upper()
@@ -201,8 +173,7 @@ class GPT(nn.Module):
         x0 = x
         for i, block in enumerate(self.blocks):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-            ve = self.value_embeds[str(i)](idx) if str(i) in self.value_embeds else None
-            x = block(x, ve, masks[i])
+            x = block(x, masks[i])
         x = norm(x)
 
         logits = self.lm_head(x).astype(mx.float32)
@@ -239,13 +210,6 @@ class AdamW:
                     "weight_decay": weight_decay,
                 }
             elif "wte" in path:
-                self.param_config[path] = {
-                    "lr": embedding_lr * dmodel_lr_scale,
-                    "betas": adam_betas,
-                    "eps": 1e-10,
-                    "weight_decay": 0.0,
-                }
-            elif "value_embeds" in path:
                 self.param_config[path] = {
                     "lr": embedding_lr * dmodel_lr_scale,
                     "betas": adam_betas,
