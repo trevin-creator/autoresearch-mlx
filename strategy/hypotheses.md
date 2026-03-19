@@ -7,13 +7,12 @@ Each entry tracks: the hypothesis, expected mechanism, dependencies, and status.
 
 ## Active Hypotheses
 
-### H1: Lower MATRIX_LR at smaller batch size
-- **Change**: MATRIX_LR from 0.04 → 0.03 (or 0.025)
-- **Rationale**: We proved higher LR (0.06) hurts at batch=2^14. Linear scaling rule suggests optimal LR scales with sqrt(batch_size), so halving batch from 2^16 to 2^14 suggests ~0.7x LR → ~0.028. Current 0.04 may be slightly above optimal.
-- **Risk**: Low — small change, easy to interpret
-- **Approach**: Sequential binary search — try 0.03 first, then narrow based on result. Each LR test costs ~7 min, so budget 2-3 runs for this sweep.
-- **Status**: Untested
-- **Priority**: HIGH
+### H1: MATRIX_LR tuning — try 0.03
+- **Change**: MATRIX_LR from 0.04 → 0.03
+- **Rationale**: We now have three data points: 0.02→1.412, 0.04→1.402, 0.06→1.495. The optimum is near 0.04 but 0.03 hasn't been tested and sits between the two closest points.
+- **Risk**: Low — but expected gain is small since 0.04 already looks near-optimal
+- **Status**: Untested (0.02 and 0.06 tested and discarded)
+- **Priority**: LOW (deprioritized — diminishing returns likely)
 
 ### H2: Reduce weight decay
 - **Change**: WEIGHT_DECAY from 0.2 → 0.1

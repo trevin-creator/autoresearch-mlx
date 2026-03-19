@@ -8,9 +8,9 @@ Consult this before testing any change in isolation — if the parameter is coup
 ## Confirmed Interactions
 
 ### Batch size ↔ Learning rate
-- **Evidence**: MATRIX_LR=0.06 at batch=2^14 gave 1.495 (much worse than 0.04 at 1.402). Increasing LR failed when batch was smaller.
-- **Rule of thumb**: When halving batch size, reduce LR by ~0.7x (sqrt scaling). Current 0.04 may already be slightly high for batch=2^14.
-- **Action**: Always re-tune LR after batch size changes. Never test a batch size change without considering LR.
+- **Evidence**: At batch=2^14: LR=0.02→1.412, LR=0.04→1.402, LR=0.06→1.495. The original LR=0.04 (tuned for batch=2^16) is still optimal at batch=2^14. Sqrt-scaling rule did NOT hold — the model wants high LR regardless of batch size.
+- **Rule of thumb**: Sqrt scaling is a starting guess, not gospel. For this model, LR=0.04 appears robust across batch sizes 2^14 to 2^16. The coupling is weaker than expected.
+- **Action**: After architecture changes, still re-tune LR. But for batch-only changes, 0.04 is likely fine.
 
 ### Batch size ↔ Device batch size
 - **Constraint**: TOTAL_BATCH_SIZE must be divisible by (DEVICE_BATCH_SIZE * MAX_SEQ_LEN). When reducing total batch, must also reduce device batch if it would violate this.

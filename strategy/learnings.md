@@ -19,9 +19,11 @@ This model is **step-count-limited**, not gradient-quality-limited. On this hard
 
 **Implication**: Any change that increases per-step compute (larger model, more complex optimizer) must be justified by proportionally better per-step learning. Changes that reduce per-step compute (simpler architecture, fewer params) could be viable if they allow even more steps without hitting the noise floor.
 
-## LR and batch size are tightly coupled (high confidence)
+## MATRIX_LR=0.04 is near-optimal at batch=2^14 (high confidence)
 
-MATRIX_LR=0.06 at batch_size=2^14 was significantly worse (1.495 vs 1.402). The original 0.04 was tuned for 2^16. With 4x fewer tokens per batch, the effective gradient noise is higher, so the LR that worked before may already be at or above optimal. Future LR experiments should try *lower*, not higher.
+Three data points: LR=0.02→1.412, LR=0.04→1.402, LR=0.06→1.495. The optimum is at or very near 0.04. The sqrt-scaling hypothesis (predict ~0.028) was wrong — this model apparently benefits from relatively high LR even at smaller batch. The sensitivity is asymmetric: too high hurts much more than too low. 0.03 might yield a marginal gain but the expected value is small.
+
+**Implication**: Don't waste runs on further MATRIX_LR tuning. Focus on other dimensions. If architecture changes significantly (depth, width, activation), LR may need re-tuning, but 0.04 is a good default.
 
 ## Warmdown ratio matters at short budgets (medium confidence)
 
