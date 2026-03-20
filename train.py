@@ -110,7 +110,7 @@ class MLP(nn.Module):
 
     def __call__(self, x):
         x = self.c_fc(x)
-        x = mx.maximum(x, 0) ** 2
+        x = x * mx.sigmoid(x)
         return self.c_proj(x)
 
 
@@ -361,10 +361,10 @@ HEAD_DIM = 128
 WINDOW_PATTERN = "SSSL"
 
 # v0.1: AdamW only. Muon port is future work.
-TOTAL_BATCH_SIZE = 2**16
+TOTAL_BATCH_SIZE = 2**15
 EMBEDDING_LR = 0.6
 UNEMBEDDING_LR = 0.004
-MATRIX_LR = 0.04
+MATRIX_LR = 0.02
 SCALAR_LR = 0.5
 WEIGHT_DECAY = 0.2
 ADAM_BETAS = (0.8, 0.95)
