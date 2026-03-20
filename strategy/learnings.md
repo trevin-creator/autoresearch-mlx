@@ -5,7 +5,15 @@ Updated after every experiment. Each entry explains *why* something worked or di
 
 ---
 
-## Per-step compute overhead is the dominant constraint (high confidence)
+## Muon optimizer is a breakthrough (high confidence)
+
+Muon (matrix sign of momentum via Newton-Schulz iteration) for weight matrices gave 1.344 vs 1.363 — a 0.020 improvement despite losing ~100 steps (1492 vs 1588) to the iteration overhead. This proves that per-step quality CAN overcome step-count loss when the optimizer improvement is large enough.
+
+Muon uses beta1=0.95 (higher momentum than Adam's 0.8) and 5 Newton-Schulz iterations per step. It replaces AdamW for 2D weight matrices only; embeddings, scalars, and gates still use Adam.
+
+**Implication**: The "per-step compute overhead kills everything" rule has an exception — when the change dramatically improves optimization quality per step. Muon is the biggest known optimizer win from the nanoGPT speedrun and it carries over to MLX.
+
+## Per-step compute overhead is the dominant constraint (high confidence, but with exception)
 
 At this model scale (11.5M params, dim=256), the model is so fast per step that ANY added computation — even tiny things like z-loss logsumexp, EMA weight updates, or an extra multiply for embed shortcircuit — costs measurable steps. Results:
 - Z-loss: 1.406 (lost ~70 steps, delta +0.004)
