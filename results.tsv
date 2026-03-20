@@ -6,3 +6,4 @@ f152d08	1.402283	21.2	keep	halve batch size again to 2^14 (device_batch=8)
 d743270	1.411769	21.2	discard	lower MATRIX_LR from 0.04 to 0.02
 6e44550	1.394091	21.2	keep	full causal attention on all layers (LLLL)
 ceb5aff	1.387529	21.2	keep	VE on all layers (15.7M params, +4.2M from extra VE)
+9962bca	1.387199	21.2	keep	increase VE gate channels from 32 to 128
