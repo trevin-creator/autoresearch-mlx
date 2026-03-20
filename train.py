@@ -234,9 +234,10 @@ class AdamW:
             if "blocks" in path and param.ndim == 2:
                 self.param_config[path] = {
                     "lr": matrix_lr,
-                    "betas": adam_betas,
+                    "betas": (0.95, 0.95),
                     "eps": 1e-10,
                     "weight_decay": weight_decay,
+                    "muon": True,
                 }
             elif "wte" in path:
                 self.param_config[path] = {
@@ -299,6 +300,18 @@ class AdamW:
         else:
             setattr(obj, last, value)
 
+    def _newton_schulz(self, M, steps=5):
+        """Compute matrix sign via Newton-Schulz iteration."""
+        a, b, c = (3.4445, -4.7750, 2.0315)
+        # Transpose so rows <= cols (cheaper iteration)
+        transposed = M.shape[0] > M.shape[1]
+        X = M.T if transposed else M
+        X = X / (mx.sqrt(mx.sum(X * X)) + 1e-7)
+        for _ in range(steps):
+            A = X @ X.T
+            X = a * X + b * (A @ X) + c * (A @ (A @ X))
+        return X.T if transposed else X
+
     def _step(self, path, grad, param, config):
         grad_f32 = grad.astype(mx.float32)
         param_f32 = param.astype(mx.float32)
@@ -306,6 +319,7 @@ class AdamW:
         beta1, beta2 = config["betas"]
         eps = config["eps"]
         weight_decay = config["weight_decay"]
+        use_muon = config.get("muon", False)
 
         if path not in self.adam_state:
             self.adam_state[path] = {
@@ -317,15 +331,22 @@ class AdamW:
         state = self.adam_state[path]
         state["t"] += 1
         state["m"] = beta1 * state["m"] + (1 - beta1) * grad_f32
-        state["v"] = beta2 * state["v"] + (1 - beta2) * (grad_f32 * grad_f32)
 
-        bias1 = 1 - beta1 ** state["t"]
-        bias2 = 1 - beta2 ** state["t"]
-        denom = mx.sqrt(state["v"] / bias2) + eps
-        step_size = lr / bias1
+        if use_muon:
+            # Muon: matrix sign of momentum
+            update = self._newton_schulz(state["m"])
+            param_f32 = param_f32 * (1 - lr * weight_decay)
+            param_f32 = param_f32 - lr * update
+        else:
+            # Standard Adam
+            state["v"] = beta2 * state["v"] + (1 - beta2) * (grad_f32 * grad_f32)
+            bias1 = 1 - beta1 ** state["t"]
+            bias2 = 1 - beta2 ** state["t"]
+            denom = mx.sqrt(state["v"] / bias2) + eps
+            step_size = lr / bias1
+            param_f32 = param_f32 * (1 - lr * weight_decay)
+            param_f32 = param_f32 - step_size * (state["m"] / denom)
 
-        param_f32 = param_f32 * (1 - lr * weight_decay)
-        param_f32 = param_f32 - step_size * (state["m"] / denom)
         return param_f32.astype(param.dtype)
 
     def update(self, model, grads):
