@@ -1,78 +1,72 @@
 # Hypotheses
 
-Untested experiment ideas with theoretical rationale. Includes both single changes and multi-change bundles.
-Each entry tracks: the hypothesis, expected mechanism, dependencies, and status.
+Untested experiment ideas with theoretical rationale.
 
-**Strategy note**: Hyperparameter tweaking (LR, WD, warmdown, betas) has reached diminishing returns. The current config is well-optimized for its architecture. Future experiments should focus on **architectural changes** and **research-inspired techniques** that change learning dynamics, not parameter grid search.
-
----
-
-## Active Hypotheses — Architectural / Research-Inspired
-
-### H11: EMA of weights for evaluation
-- **Change**: Maintain an exponential moving average of model weights (decay ~0.995). Before evaluation, swap in EMA weights. This doesn't change training at all — only the checkpoint used for final eval.
-- **Rationale**: With 1600 noisy small-batch updates, the final weights are a single noisy point. EMA smooths out the noise for a better eval checkpoint. This is standard practice (Polyak averaging) and essentially free improvement.
-- **Risk**: Very low. Small memory overhead (~2x param storage). No training time cost beyond a few multiplies per step.
-- **Status**: Untested
-- **Priority**: HIGH
-
-### H12: Tied input/output embeddings
-- **Change**: Share weights between `wte` (input embedding) and `lm_head` (output projection). Since vocab_size=8192 and model_dim=256, both are [8192, 256] matrices. Tying them forces consistency and halves embedding param count.
-- **Rationale**: Standard in many modern LLMs (T5, LLaMA at some scales). Reduces param count but forces the embedding to be useful for both input representation and output prediction. The freed parameters could be reinvested (e.g., slightly wider model).
-- **Risk**: Medium — could hurt if the model benefits from separate embedding spaces.
-- **Status**: Untested
-- **Priority**: HIGH
-
-### H13: Z-loss regularization
-- **Change**: Add a small penalty on log(Z) where Z = sum(exp(logits)). Implementation: `z_loss = 1e-4 * mean(log(sum(exp(logits)))^2)`.
-- **Rationale**: From PaLM and nanoGPT speedrun. Prevents logit drift and keeps the softmax numerically stable. Works synergistically with the existing logit capping (which we've confirmed is valuable).
-- **Risk**: Very low — tiny regularization term.
-- **Status**: Untested
-- **Priority**: HIGH
-
-### H14: Embed shortcircuit (skip connection from embeddings to output)
-- **Change**: Before the final lm_head projection, mix in the original embeddings: `x = x + alpha * x0` where x0 is the post-embedding representation and alpha is small (e.g., 0.1).
-- **Rationale**: From nanoGPT speedrun. Creates a direct gradient path from the loss to the embeddings, improving embedding learning speed. Especially valuable for short training runs where embeddings may be undertrained.
-- **Risk**: Low — small architectural change, easy to tune alpha.
-- **Status**: Untested
-- **Priority**: HIGH
-
-### H15: Learnable RMSNorm (replace inline norm function)
-- **Change**: Replace the fixed `norm(x)` with `nn.RMSNorm(n_embd)` which adds a learnable per-channel scale parameter.
-- **Rationale**: Gives the model per-channel control over feature magnitudes. Tiny param increase (~256 params per usage). Standard in modern architectures.
-- **Risk**: Very low.
-- **Status**: Untested
-- **Priority**: MEDIUM
-
-### H16: Attention temperature scaling
-- **Change**: Replace fixed `scale = 1/sqrt(head_dim)` with a learnable per-head temperature or use a different fixed scale (e.g., `1/sqrt(head_dim * 0.5)` for sharper attention).
-- **Rationale**: The nanoGPT speedrun and other work found that sharper attention (higher effective temperature) can improve learning at small scales. With only 2 heads, each head needs to attend precisely.
-- **Risk**: Low.
-- **Status**: Untested
-- **Priority**: MEDIUM
+**Current best: 1.295 bpb. Strategy: research-inspired architectural changes over parameter tweaking.**
 
 ---
 
-## Deprioritized — Hyperparameter Tweaks
+## Active — Awaiting Literature Refresh
 
-These have reached diminishing returns. Only revisit if architectural changes shift the landscape.
+These ideas are pending results from the current literature research agents. Will be prioritized after results arrive.
 
-- **H1**: MATRIX_LR=0.03 — 0.04 is near-optimal (0.02 and 0.06 both worse)
-- **H3**: Cosine warmdown — tested as bundle with warmup, result 1.409 (near-miss)
-- **H5**: Small warmup — tested as bundle with cosine, result 1.409 (near-miss)
-- **H8**: ADAM_BETAS tuning — deprioritized per strategy shift
+### H20: xIELU activation (arXiv:2411.13010)
+- **Change**: Replace SqReLU with xIELU — a trainable piecewise activation with `x^2/2 + x` for positive inputs.
+- **Rationale**: Beat both SwiGLU and SqReLU at 1.1B-3B scale. If it works at 15M scale, it's a drop-in replacement.
+- **Status**: Awaiting implementation details from literature agent
+- **Priority**: HIGH (pending research)
+
+### H21: GLU + SqReLU (gated SqReLU)
+- **Change**: `sqrelu(W1(x)) * W3(x)` — add gating to our working activation. Reduce hidden dim to compensate for extra params.
+- **Rationale**: Gets gating benefits without changing the activation function. SwiGLU alone failed, but SwiGLU uses SiLU which we know is worse than SqReLU here.
+- **Status**: Awaiting literature confirmation
+- **Priority**: HIGH
+
+### H22: Muon scheduling / momentum warmup
+- **Change**: Start Muon beta1 lower (e.g., 0.85) and ramp to 0.95 over first ~300 steps.
+- **Rationale**: Early training has noisier gradients, lower momentum helps. Later training benefits from more smoothing.
+- **Status**: Awaiting research on Muon-specific schedules
+- **Priority**: MEDIUM
+
+### H23: Deep Delta Learning (arXiv:2601.00417)
+- **Change**: Rank-1 perturbation of residual connections. Per-layer learned unit vector + scalar.
+- **Rationale**: Very recent (Jan 2026), consistent improvement across scales. Minimal param overhead.
+- **Status**: Awaiting full implementation details
+- **Priority**: MEDIUM
+
+### H24: SOAP optimizer (arXiv:2409.11321)
+- **Change**: Alternative to Muon for weight matrices.
+- **Status**: Awaiting comparison research
+- **Priority**: LOW (Muon is already working well)
+
+---
+
+## Active — Ready to Test
+
+### H25: HEAD_DIM=64 revisit (4 heads, current config)
+- **Change**: HEAD_DIM 128→64
+- **Rationale**: Previously failed at old config (1.695 vs 1.623, fewer steps). But now: Muon (+better per-step quality), Peri-LN (+stability), batch=2^14 (+more steps), VE on all layers (+capacity). The context has changed dramatically.
+- **Risk**: Medium — head dim change affects attention compute, may still lose too many steps
+- **Status**: Ready to test
+- **Priority**: MEDIUM
+
+### H26: Smaller wte init scale
+- **Change**: wte init from `normal * 1.0` to `uniform(-scale, scale)` matching other weights
+- **Rationale**: wte is initialized at much larger scale than other weights. The post-embedding norm clamps it, but gradient dynamics may differ.
+- **Status**: Was committed but interrupted before running
+- **Priority**: LOW
+
+---
+
+## Deprioritized
+
+- H1: MATRIX_LR=0.03 (0.01 confirmed optimal for Muon)
+- H3/H5: Cosine warmdown / warmup (1.409 as bundle, near-miss)
+- H8: ADAM_BETAS tuning for non-Muon params (low expected impact)
+- All other hyperparameter tweaks
 
 ---
 
 ## Tested / Resolved
 
-- **H2**: WD=0.1 → 1.418 (worse). WD=0.2 confirmed optimal.
-- **H4**: Remove logit cap → 1.430 (worse despite more steps). Cap is beneficial.
-- **H6**: DEPTH=6 → 1.593 (way worse, only 705 steps at 26.3M params)
-- **H9**: Remove VE → 1.543 (way worse, lost 36% of params)
-- **H10**: WARMDOWN_RATIO=0.2 → 1.429 (worse). 0.3 is optimal.
-- MLP 3x ratio → 1.455 (worse, lost capacity)
-- SwiGLU at dim=256 → 1.665 (worse, tested at old config)
-- HEAD_DIM=64 → 1.695 (worse, tested at old config)
-- Cautious Adam → 1.846 (way worse)
-- Gradient centralization → 1.692 (worse)
+See strategy/learnings.md for full results of all ~30 experiments.

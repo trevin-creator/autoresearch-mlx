@@ -3,110 +3,101 @@
 Hardware- and config-specific insights derived from experiments on this machine.
 Updated after every experiment. Each entry explains *why* something worked or didn't, not just whether it did.
 
----
-
-## Muon optimizer is a breakthrough (high confidence)
-
-Muon (matrix sign of momentum via Newton-Schulz iteration) for weight matrices gave 1.344 vs 1.363 — a 0.020 improvement despite losing ~100 steps (1492 vs 1588) to the iteration overhead. This proves that per-step quality CAN overcome step-count loss when the optimizer improvement is large enough.
-
-Muon uses beta1=0.95 (higher momentum than Adam's 0.8) and 5 Newton-Schulz iterations per step. It replaces AdamW for 2D weight matrices only; embeddings, scalars, and gates still use Adam.
-
-**Implication**: The "per-step compute overhead kills everything" rule has an exception — when the change dramatically improves optimization quality per step. Muon is the biggest known optimizer win from the nanoGPT speedrun and it carries over to MLX.
-
-**Muon LR sweep**: 0.04→1.344, 0.02→1.318, 0.01→1.306, 0.005→1.311. Optimum at 0.01 — much lower than Adam's 0.04. Muon's orthogonal updates are more powerful per step so lower LR prevents overshooting. Don't tune further; 0.01 is confirmed.
-
-## Per-step compute overhead is the dominant constraint (high confidence, but with exception)
-
-At this model scale (11.5M params, dim=256), the model is so fast per step that ANY added computation — even tiny things like z-loss logsumexp, EMA weight updates, or an extra multiply for embed shortcircuit — costs measurable steps. Results:
-- Z-loss: 1.406 (lost ~70 steps, delta +0.004)
-- EMA: 1.452 (lost ~40 steps, but also averaged in stale weights)
-- Embed shortcircuit: 1.415 (lost ~50 steps)
-- Removing logit cap: 1.430 (GAINED 194 steps but worse per-step learning)
-
-The last point is key: logit cap removal added steps but hurt quality, proving that per-step quality and step count both matter. The current model sits at a precise balance point. Winning changes must either: (1) improve per-step quality WITHOUT adding compute, or (2) add so much per-step quality that the step loss is worth it (which means a big architectural shift, not a small regularizer).
-
-**Implication**: Focus on changes that are compute-neutral (e.g., different weight initialization, different optimizer schedule shape) or on bigger architectural shifts where the quality-per-step gain is large enough to overcome step loss.
-
-## Single-machine, sequential-only constraint (hard constraint)
-
-All experiments run on one M4 Max laptop. No parallel training jobs — concurrent runs produce incomparable results due to GPU contention and non-deterministic scheduling. This means every experiment costs ~7 minutes of wall time with no shortcut. The strategy knowledge base exists specifically to compensate: invest thinking time (consulting hypotheses, interactions, near-misses) to make each of those 7-minute slots count. Bad experiment picks are the main bottleneck, not compute.
+**Current best: 1.295 bpb** (13 kept experiments from 1.623 baseline)
 
 ---
 
-## Step-count dominance (high confidence)
+## Core Principles (derived from ~30 experiments)
 
-This model is **step-count-limited**, not gradient-quality-limited. On this hardware (M4 Max), reducing batch size from 2^16 → 2^15 → 2^14 gave the two largest improvements in the entire run (1.623 → 1.540 → 1.402). The model is small enough (~11.5M params) that each forward/backward pass is fast, so more optimizer steps per 5-minute budget wins.
+### Step count vs per-step quality trade-off (high confidence)
 
-**However**, there's a floor: 2^13 (device_batch=4) degraded to 1.542 — gradient noise dominates at that scale. The sweet spot appears to be 2^14 with device_batch=8.
+The model operates in a **step-count-dominated regime** at batch=2^14 (~1500 steps in 5 min). Any change that adds per-step compute costs measurable steps. Small additions (z-loss, EMA, embed shortcircuit) consistently fail because the step loss outweighs tiny quality gains.
 
-**Implication**: Any change that increases per-step compute (larger model, more complex optimizer) must be justified by proportionally better per-step learning. Changes that reduce per-step compute (simpler architecture, fewer params) could be viable if they allow even more steps without hitting the noise floor.
+**Exception**: Muon optimizer added significant per-step compute (Newton-Schulz iterations, ~100 fewer steps) but its per-step quality improvement was large enough to overcome the step penalty. The threshold appears to be ~0.02+ bpb improvement per step to justify the compute cost.
 
-## MATRIX_LR=0.04 is near-optimal at batch=2^14 (high confidence)
+### Muon optimizer with tuned hyperparams (high confidence)
 
-Three data points: LR=0.02→1.412, LR=0.04→1.402, LR=0.06→1.495. The optimum is at or very near 0.04. The sqrt-scaling hypothesis (predict ~0.028) was wrong — this model apparently benefits from relatively high LR even at smaller batch. The sensitivity is asymmetric: too high hurts much more than too low. 0.03 might yield a marginal gain but the expected value is small.
+Muon for weight matrices is the single best change after batch reduction. Key findings:
+- **LR**: 0.04→1.344, 0.02→1.318, **0.01→1.306**, 0.005→1.311. Optimum at 0.01 (4x lower than Adam's optimal 0.04).
+- **Beta1**: **0.9→1.295**, 0.85→1.296, 0.95→1.306. Less momentum (0.9) is better with noisy small-batch gradients.
+- **Weight decay**: WD=0.2 is better than WD=0.0 for Muon matrices. WD provides useful regularization that Muon's matrix sign doesn't replace.
+- **Scope**: Muon for block weights only. Applying Muon to lm_head was much worse (1.410) — embeddings and output heads should stay on Adam.
+- **Newton-Schulz iterations**: 5 is better than 3 (1.308 vs 1.306). The quality of the matrix sign approximation matters.
 
-**Implication**: Don't waste runs on further MATRIX_LR tuning. Focus on other dimensions. If architecture changes significantly (depth, width, activation), LR may need re-tuning, but 0.04 is a good default.
+### Embedding LR needs rebalancing after Muon (high confidence)
 
-## Full attention beats sliding window at 4 layers (high confidence)
+EMBEDDING_LR 0.6→0.3 gave 1.300→ improvement after Muon was introduced. Muon makes weight matrices learn faster, so embedding LR needed to come down to avoid embeddings over-learning relative to matrices. Always re-tune adjacent LRs after a major optimizer change.
 
-Changing WINDOW_PATTERN from "SSSL" to "LLLL" gave 1.394 vs 1.402 — an improvement with MORE steps (1645 vs 1600). Two wins: (1) full context visibility on all layers is more expressive, (2) uniform mask = better caching = slightly faster per step. At 4 layers, restricting 3 of them to half-context windows is too aggressive.
+---
 
-**Implication**: Simplifications that remove unnecessary constraints can win on both quality and speed. The sliding window pattern makes more sense at higher depth where some layers can afford limited context.
+## Architecture Findings
 
-## WARMDOWN_RATIO=0.3 is the sweet spot (high confidence)
+### Full attention beats sliding window at 4 layers (high confidence)
 
-Three data points: 0.5→1.623, 0.3→1.613 (at old batch), 0.2→1.429 (at batch=2^14). The 0.5→0.3 change was a clear win. But 0.3→0.2 was a big regression at the current config. The model needs sufficient cooldown time — ~30% of training spent in LR decay appears optimal. Not worth tuning further.
+WINDOW_PATTERN "SSSL"→"LLLL" gave 1.394 vs 1.402 with MORE steps. At 4 layers, restricting context is too aggressive. Uniform masks also cache better.
 
-## Peri-LN is the biggest single-experiment architectural win (high confidence)
+### VE on all layers is optimal (high confidence)
 
-Adding post-sub-layer normalization (`x = x + norm(attn(norm(x)))`) gave 1.363 vs 1.387 — a 0.024 improvement with negligible compute cost (~1588 vs 1611 steps). This stabilizes variance growth through the residual stream. Adopted by Gemma 2 and OLMo 2.
+VE on all 4 layers (vs alternating 2) gave 1.388 vs 1.394. VE is the cheapest way to add capacity (embedding lookups, not matmuls). Total VE is now ~8.4M of 15.7M params (53%).
 
-**Implication**: The model benefits from tighter variance control. Other normalization experiments (learnable RMSNorm: worse, DyT: much worse) suggest that the specific combination of fixed RMSNorm + peri-LN placement is important — not just any normalization will do.
+### Peri-LN is the biggest single architectural win (high confidence)
 
-## Logit softcap = 15 is better than 30 with peri-LN (medium confidence)
+Post-sub-layer norm (`x + norm(attn(norm(x)))`) gave 1.363 vs 1.387 — 0.024 improvement. The model needs both pre-norm AND post-norm. Asymmetric peri-LN (only post-attn, not post-MLP) is slightly worse (1.301 vs 1.300). Both post-norms matter.
 
-Softcap 30 gave 1.370 vs softcap 15 at 1.363. The tighter cap works better, possibly because peri-LN already controls variance so the model doesn't need wider logit range.
+### Fixed RMSNorm is better than learnable or DyT (high confidence)
 
-## Logit soft-capping helps training quality (high confidence)
+Learnable RMSNorm: 1.433 vs 1.402. DyT: 1.506 vs 1.363. The fixed `norm(x) = x * rsqrt(mean(x^2) + eps)` is the right choice. Learnable scale params add nothing useful; DyT's tanh saturation is fundamentally wrong for this architecture.
 
-Removing logit capping gives more steps (1794 vs 1600 — the tanh costs compute) but worse val_bpb (1.430 vs 1.402). The cap constrains logit magnitude which stabilizes gradients and improves per-step learning efficiency. This is NOT dead weight — it's an active training quality improvement. Do not remove.
+### Logit softcap = 15 is correct (high confidence)
 
-**Implication**: The cap value (15.0) could potentially be tuned but removing it entirely is harmful.
+Removing cap: 1.430 (more steps but worse quality). Cap=30: 1.370 vs cap=15 at 1.363. The tight cap stabilizes gradients. Don't change.
 
-## SwiGLU needs param-count compensation (medium confidence)
+### SqReLU is better than SiLU (high confidence, current config)
 
-SwiGLU with 8/3x hidden dim reduced params from ~11.5M to ~11.6M (actually similar) but val_bpb was 1.665 vs 1.623. The issue may not be param count but rather that the model dim (256) is too small for gating to help — the gate projection consumes capacity that could be used for raw width. At larger model dims, SwiGLU is standard. Consider testing only if we increase model width.
+SiLU gave 1.325 vs SqReLU at 1.300. SqReLU's sparsity (hard zero + squaring) is more efficient. However, GLU variants (gating) haven't been tested with SqReLU — worth exploring.
 
-## Gradient centralization hurts here (medium confidence)
+### Depth increases are too expensive (high confidence)
 
-GC gave 1.692 vs 1.613. Centering gradients may conflict with the existing QK-norm + RMSNorm setup, or the model may be too small for the implicit regularization to help.
+DEPTH=5: 1.336 (779 steps, 30.9M params). DEPTH=6: 1.593 (705 steps). Each extra layer adds ~15M params (mostly VE) which halves step count. Even Muon can't compensate.
 
-## Value embeddings: more is better (high confidence)
+### Width increases are too expensive (high confidence)
 
-VE on all 4 layers (instead of alternating 2) gave 1.388 vs 1.394 — a clear win. Added 4.2M params (11.5M → 15.7M) with negligible compute cost (embedding lookups are fast on MLX). VE is one of the most efficient ways to add model capacity because it's just a lookup table, not a matrix multiply.
+dim=384 (ASPECT_RATIO=96): 1.478 (1035 steps, 26M params). MLP/attention compute grows quadratically with dim.
 
-**Implication**: VE is high-value-per-FLOP capacity. If we need more model capacity, VE expansion is the cheapest way to get it. However, removing VE entirely was devastating (1.543 at 7.3M params), confirming it's load-bearing.
+### MLP ratio changes don't help (medium confidence)
 
-## OLD: Value embeddings are critical at this scale (high confidence)
+3x MLP: 1.455 (less capacity). 5x MLP: 1.307 (more capacity but too expensive). 4x is the sweet spot.
 
-Removing VE dropped params from 11.5M to 7.3M (VE = 36% of total params!) and val_bpb from 1.402 to 1.543. VE is not dead weight — it provides substantial model capacity via input-dependent value bias. At dim=256 with only 4 layers, these extra embedding parameters are essential.
+---
 
-**Implication**: Don't try to simplify VE away. If anything, VE could be expanded (e.g., add VE to every layer instead of alternating). But the current alternating pattern is a reasonable efficiency trade-off.
+## Optimizer Findings (non-Muon)
 
-## EMA of weights hurts at this training length (medium confidence)
+### ADAM_BETAS, WEIGHT_DECAY, warmdown are all tuned (high confidence)
 
-EMA with decay=0.99 (1.452) and 0.995 (1.496) both worse than raw weights (1.402). Two reasons: (1) EMA update costs compute per step, reducing total steps from ~1600 to ~1560. (2) The linear warmdown schedule already produces a well-converged final checkpoint — the last weights ARE the best weights. EMA averages in earlier, worse checkpoints.
+- ADAM_BETAS=(0.8, 0.95) for non-Muon params: not tuned post-Muon, but the embedding/scalar params are a smaller fraction now
+- WEIGHT_DECAY=0.2: WD=0.1 was worse (1.418)
+- WARMDOWN_RATIO=0.3: 0.5 was worse, 0.2 was worse. 0.3 is the sweet spot
+- FINAL_LR_FRAC=0.0: 0.05 was worse (1.410)
+- Cosine warmdown + warmup(0.02): 1.409 — near-miss but not better than linear
 
-**Implication**: Don't use EMA unless the training schedule changes (e.g., constant LR with no warmdown, where the final checkpoint is noisy). The current warmdown serves the same purpose as EMA — it produces smooth convergence.
+### EMA of weights is harmful (medium confidence)
 
-## Cautious Adam is too aggressive with rescaling (medium confidence)
+EMA with decay 0.99 and 0.995 both worse than raw weights. The linear warmdown already produces a well-converged final checkpoint.
 
-C-Adam with the standard rescaling factor gave 1.846 vs 1.613 — a dramatic regression. The mask * (size/sum(mask)) rescaling amplifies surviving updates too much. A version *without* the rescaling factor might be worth trying, but the signal is strongly negative.
+---
 
-## HEAD_DIM=64 hurts throughput more than it helps expressiveness (low confidence)
+## Dead Ends
 
-4 heads gave 1.695 vs 1.623 with fewer steps (351 vs 400). The smaller head dim increased compute per step enough to reduce step count, and the extra attention heads didn't compensate. Tested at baseline config though — might differ at current batch=2^14.
+- Gradient centralization: 1.692 (conflicts with existing normalization)
+- Cautious Adam: 1.846 (rescaling too aggressive)
+- Tied embeddings: 4.084 (LR conflict between input/output roles)
+- Remove x0 skip connections: 1.527 (critical for training dynamics, even though 2121 steps)
+- Remove post-embedding norm: 1.345
+- Zero-init lm_head: 1.302 (near-zero 0.001 init is better than true zero)
+- Embedding weight decay: 1.305 (embeddings need full freedom)
 
-## FINAL_LR_FRAC=0.05 is slightly worse (low confidence)
+---
 
-Gave 1.410 vs 1.402 — close but consistently worse. The model benefits from full LR decay to zero. Not worth revisiting unless the warmdown shape changes.
+## Single-machine constraint (hard constraint)
+
+All experiments run sequentially on one M4 Max. ~7 min per experiment. Strategy knowledge base compensates by making smarter picks.
