@@ -1,72 +1,78 @@
 # Hypotheses
 
-Untested experiment ideas with theoretical rationale.
+**Current best: 1.295 bpb.**
 
-**Current best: 1.295 bpb. Strategy: research-inspired architectural changes over parameter tweaking.**
+Prioritized by expected impact based on literature refresh (Mar 19 evening).
 
 ---
 
-## Active — Awaiting Literature Refresh
+## Tier 1: HIGH expected impact
 
-These ideas are pending results from the current literature research agents. Will be prioritized after results arrive.
+### H30: mx.fast.rms_norm replacing inline norm()
+- **Change**: Replace `norm(x) = x * rsqrt(mean(x*x) + eps)` with `mx.fast.rms_norm(x, weight=None, eps=1e-5)`
+- **Rationale**: Single optimized Metal kernel vs multiple element-wise ops. Called 20+ times per forward pass. Pure speed gain, no quality change.
+- **Risk**: Very low — same math, faster kernel
+- **Priority**: HIGHEST (compute-neutral speed win)
 
-### H20: xIELU activation (arXiv:2411.13010)
-- **Change**: Replace SqReLU with xIELU — a trainable piecewise activation with `x^2/2 + x` for positive inputs.
-- **Rationale**: Beat both SwiGLU and SqReLU at 1.1B-3B scale. If it works at 15M scale, it's a drop-in replacement.
-- **Status**: Awaiting implementation details from literature agent
-- **Priority**: HIGH (pending research)
+### H31: mx.compile the training step
+- **Change**: Wrap forward+backward+optimizer into `mx.compile` decorated function
+- **Rationale**: Fuses all element-wise ops into single graph. MLX docs show significant speedups. More steps in 5 min = better val_bpb.
+- **Risk**: Medium — requires restructuring loop, compiled fns must be pure (no mx.eval inside)
+- **Priority**: HIGH (but complex implementation)
+- **Note**: May conflict with Muon's Newton-Schulz iterations which use loops. Test carefully.
 
-### H21: GLU + SqReLU (gated SqReLU)
-- **Change**: `sqrelu(W1(x)) * W3(x)` — add gating to our working activation. Reduce hidden dim to compensate for extra params.
-- **Rationale**: Gets gating benefits without changing the activation function. SwiGLU alone failed, but SwiGLU uses SiLU which we know is worse than SqReLU here.
-- **Status**: Awaiting literature confirmation
+### H32: xIELU activation (non-GLU, drop-in for SqReLU)
+- **Change**: Replace `max(0,x)^2` with `x * sigmoid(beta*x) + alpha * min(0,x)^2`
+- **Rationale**: Trainable activation that learns optimal shape per channel. Beat SqReLU 1-3% at small scale. 2 extra params per hidden dim (negligible). No GLU restructuring needed.
+- **Risk**: Low — drop-in replacement, easy to revert
 - **Priority**: HIGH
 
-### H22: Muon scheduling / momentum warmup
-- **Change**: Start Muon beta1 lower (e.g., 0.85) and ramp to 0.95 over first ~300 steps.
-- **Rationale**: Early training has noisier gradients, lower momentum helps. Later training benefits from more smoothing.
-- **Status**: Awaiting research on Muon-specific schedules
-- **Priority**: MEDIUM
-
-### H23: Deep Delta Learning (arXiv:2601.00417)
-- **Change**: Rank-1 perturbation of residual connections. Per-layer learned unit vector + scalar.
-- **Rationale**: Very recent (Jan 2026), consistent improvement across scales. Minimal param overhead.
-- **Status**: Awaiting full implementation details
-- **Priority**: MEDIUM
-
-### H24: SOAP optimizer (arXiv:2409.11321)
-- **Change**: Alternative to Muon for weight matrices.
-- **Status**: Awaiting comparison research
-- **Priority**: LOW (Muon is already working well)
+### H33: Warm-start Newton-Schulz
+- **Change**: Cache previous orthogonalized matrix, use as starting point. Reduce iterations from 5 to 3.
+- **Rationale**: Consecutive momentum matrices are similar. Warm start converges in fewer iterations. Recovers ~30-40% of Muon overhead → more steps.
+- **Risk**: Low — if approximation quality drops, we just revert
+- **Priority**: HIGH
 
 ---
 
-## Active — Ready to Test
+## Tier 2: MEDIUM expected impact
 
-### H25: HEAD_DIM=64 revisit (4 heads, current config)
-- **Change**: HEAD_DIM 128→64
-- **Rationale**: Previously failed at old config (1.695 vs 1.623, fewer steps). But now: Muon (+better per-step quality), Peri-LN (+stability), batch=2^14 (+more steps), VE on all layers (+capacity). The context has changed dramatically.
-- **Risk**: Medium — head dim change affects attention compute, may still lose too many steps
-- **Status**: Ready to test
+### H34: GLU + SqReLU (already committed, pending run)
+- **Change**: `sqrelu(W1(x)) * W3(x)` with 8/3x hidden dim for param parity
+- **Rationale**: Adds multiplicative gating while keeping our best activation. Currently committed but was interrupted before running.
+- **Priority**: MEDIUM (already ready to test)
+
+### H35: Nesterov momentum in Muon
+- **Change**: Compute Nesterov lookahead gradient before accumulating into momentum
+- **Rationale**: Small but consistent ~0.5-1% convergence improvement per speedrun community
+- **Risk**: Very low
 - **Priority**: MEDIUM
 
-### H26: Smaller wte init scale
-- **Change**: wte init from `normal * 1.0` to `uniform(-scale, scale)` matching other weights
-- **Rationale**: wte is initialized at much larger scale than other weights. The post-embedding norm clamps it, but gradient dynamics may differ.
-- **Status**: Was committed but interrupted before running
+### H36: Sparse Attention Gate (nanoGPT Record 28)
+- **Change**: Sigmoid gate on first 12 dims of input modulates each head's output
+- **Rationale**: Reduces attention sink behavior. ~24 extra params (12 * 2 heads).
+- **Risk**: Low
+- **Priority**: MEDIUM
+
+### H37: SiLU^2 activation
+- **Change**: Replace `max(0,x)^2` with `silu(x)^2`
+- **Rationale**: SqReLU sharpness + SiLU smoothness. Zero extra params. SiLU alone failed (1.325) but squaring it may give the best of both.
+- **Risk**: Low
+- **Priority**: MEDIUM
+
+---
+
+## Tier 3: LOWER expected impact / higher risk
+
+### H38: Cautious Muon (no rescaling)
+- **Change**: Mask Muon updates where current and previous updates disagree in sign, WITHOUT rescaling
+- **Rationale**: C-Adam with rescaling was terrible (1.846), but the problem was the rescaling, not the masking idea itself
 - **Priority**: LOW
 
----
-
-## Deprioritized
-
-- H1: MATRIX_LR=0.03 (0.01 confirmed optimal for Muon)
-- H3/H5: Cosine warmdown / warmup (1.409 as bundle, near-miss)
-- H8: ADAM_BETAS tuning for non-Muon params (low expected impact)
-- All other hyperparameter tweaks
+### H39: Multi-token prediction auxiliary head
+- **Priority**: LOW (complex, uncertain payoff)
 
 ---
 
 ## Tested / Resolved
-
-See strategy/learnings.md for full results of all ~30 experiments.
+See strategy/learnings.md for all ~30 experiment results.
