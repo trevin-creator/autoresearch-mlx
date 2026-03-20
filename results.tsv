@@ -9,3 +9,4 @@ ceb5aff	1.387529	21.2	keep	VE on all layers (15.7M params, +4.2M from extra VE)
 9962bca	1.387199	21.2	keep	increase VE gate channels from 32 to 128
 8257bff	1.363315	21.2	keep	Peri-LN (post-sub-layer norm, Gemma 2 style)
 abacf96	1.343703	21.2	keep	Muon optimizer for weight matrices (Newton-Schulz iteration)
+cc61926	1.317948	21.2	keep	lower MATRIX_LR to 0.02 (re-tune for Muon)
