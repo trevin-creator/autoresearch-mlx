@@ -12,6 +12,12 @@ Each entry records: the change, the result, the context it was tested in, and wh
 - **Why revisit**: Delta was within noise. Config has changed dramatically since (batch=2^14, warmdown=0.3). The README notes "no logit cap" was a repeated winner on M4 Max. Should be re-tested in current config.
 - **Priority**: High
 
+## Cosine warmdown + warmup (0.02)
+- **Result**: 1.409 vs 1.402 (delta: +0.007)
+- **Context**: Tested at current config (batch=2^14, warmdown=0.3)
+- **Why revisit**: Within noise range. The warmup might help or hurt independently of cosine. Could ablate: try cosine-only (no warmup) or warmup-only (no cosine).
+- **Priority**: Low
+
 ## FINAL_LR_FRAC=0.05
 - **Result**: 1.410 vs 1.402 (delta: +0.008)
 - **Context**: Tested at current config (batch=2^14, warmdown=0.3)
