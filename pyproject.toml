@@ -14,3 +14,27 @@ dependencies = [
     "tiktoken>=0.11.0",
     "h5py>=3.0.0",
 ]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # pydocstyle — no docstring enforcement
+    "ANN",     # flake8-annotations — let ty handle types
+    "ERA",     # eradicate — don't flag commented-out code
+    "T20",     # flake8-print — allow print()
+    "FIX",     # flake8-fixme — allow TODO/FIXME
+    "TD",      # flake8-todos — no todo format rules
+    "S101",    # assert — allow assert in non-test code
+    "INP001",  # implicit-namespace-package — flat scripts OK
+    "COM812",  # trailing-comma — conflicts with formatter
+    "ISC001",  # single-line-implicit-string-concat — conflicts with formatter
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["spyx_mlx"]
+
+[tool.ty.environment]
+python-version = "3.12"
