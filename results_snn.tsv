@@ -1,2 +1,3 @@
 commit	val_acc	memory_gb	status	description
 5df79b4	0.790636	0.2	keep	baseline LIF 128 hidden 2 layers T=128 lr=1e-3 AdamW
+4311dc9	0.817138	0.2	keep	ALIF neurons + batch 48

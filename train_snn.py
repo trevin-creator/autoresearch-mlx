@@ -30,7 +30,7 @@ from prepare_snn import (
     load_datasets,
 )
 from spyx_mlx import fn
-from spyx_mlx.nn import ALIF, IF, LI, LIF, CuBaLIF
+from spyx_mlx.nn import ALIF, IF, LI, LIF, CuBaLIF, RLIF
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
@@ -42,7 +42,7 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 N_HIDDEN    = 128       # neurons per hidden layer
 N_LAYERS    = 2         # number of hidden spiking layers
 T_STEPS_RUN = T_STEPS  # time steps (must match prepare_snn.T_STEPS or override)
-BATCH_SIZE  = 64
+BATCH_SIZE  = 48
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY  = 1e-4
 LABEL_SMOOTHING = 0.3
@@ -65,8 +65,8 @@ FINAL_EVAL_BATCH_SIZE = 256
 
 class SHD_SNN(nn.Module):
     """
-    Baseline 2-layer LIF network for SHD.
-    Linear -> LIF -> Linear -> LIF -> Linear -> LI
+    2-layer ALIF network for SHD. Adaptive threshold improves temporal coding.
+    Linear -> ALIF -> Linear -> ALIF -> Linear -> LI
     """
 
     def __init__(self, n_input, n_hidden, n_layers, n_classes):
@@ -77,9 +77,9 @@ class SHD_SNN(nn.Module):
         # Input projection
         self.input_proj = nn.Linear(n_input, n_hidden, bias=False)
 
-        # Hidden layers: alternating Linear + LIF
+        # Hidden layers: alternating Linear + ALIF
         self.hidden_linears = [nn.Linear(n_hidden, n_hidden, bias=False) for _ in range(n_layers - 1)]
-        self.lif_layers = [LIF(n_hidden) for _ in range(n_layers)]
+        self.alif_layers = [ALIF(n_hidden) for _ in range(n_layers)]
 
         # Output
         self.output_proj = nn.Linear(n_hidden, n_classes, bias=False)
@@ -95,19 +95,19 @@ class SHD_SNN(nn.Module):
         """
         T, B, _ = x_seq.shape
 
-        # Initialise states
-        lif_states = [lif.initial_state(B) for lif in self.lif_layers]
-        li_state   = self.readout.initial_state(B)
+        # Initialise states: ALIF state is (V, threshold_adaptation)
+        alif_states = [alif.initial_state(B) for alif in self.alif_layers]
+        li_state    = self.readout.initial_state(B)
 
         traces = []
         for t in range(T):
             x = x_seq[t]                              # (B, n_input)
             x = self.input_proj(x)                    # (B, n_hidden)
-            x, lif_states[0] = self.lif_layers[0](x, lif_states[0])
+            x, alif_states[0] = self.alif_layers[0](x, alif_states[0])
 
-            for i, (linear, lif) in enumerate(zip(self.hidden_linears, self.lif_layers[1:])):
+            for i, (linear, alif) in enumerate(zip(self.hidden_linears, self.alif_layers[1:])):
                 x = linear(x)
-                x, lif_states[i + 1] = lif(x, lif_states[i + 1])
+                x, alif_states[i + 1] = alif(x, alif_states[i + 1])
 
             x = self.output_proj(x)                   # (B, n_classes)
             v_out, li_state = self.readout(x, li_state)
