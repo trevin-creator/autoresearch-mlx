@@ -13,25 +13,25 @@ import gc
 import math
 import os
 import time
-from dataclasses import dataclass
+from functools import partial
 
 import mlx.core as mx
-import mlx.nn as nn
 import mlx.optimizers as optim
+import numpy as np
+from mlx import nn
 from mlx.utils import tree_flatten
 
 from prepare_snn import (
     N_CHANNELS,
     N_CLASSES,
-    TIME_BUDGET,
     T_STEPS,
+    TIME_BUDGET,
     evaluate_accuracy,
     get_peak_memory_mb,
     load_datasets,
 )
 from spyx_mlx import fn
-from spyx_mlx.axn import arctan
-from spyx_mlx.nn import ALIF, IF, LI, LIF, CuBaLIF, RLIF
+from spyx_mlx.nn import ALIF, LI
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
@@ -40,21 +40,21 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 # Hyperparameters — edit these freely
 # ---------------------------------------------------------------------------
 
-N_HIDDEN    = 128       # neurons per hidden layer
-N_LAYERS    = 2         # number of hidden spiking layers
+N_HIDDEN = 128  # neurons per hidden layer
+N_LAYERS = 2  # number of hidden spiking layers
 T_STEPS_RUN = T_STEPS  # time steps (must match prepare_snn.T_STEPS or override)
-BATCH_SIZE  = 48
+BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
-WEIGHT_DECAY  = 1e-4
+WEIGHT_DECAY = 1e-4
 LABEL_SMOOTHING = 0.3
 
 # Learning rate schedule: cosine decay with linear warmup
-WARMUP_RATIO   = 0.05
-FINAL_LR_FRAC  = 0.0    # fraction of peak LR at end of training
+WARMUP_RATIO = 0.05
+FINAL_LR_FRAC = 0.0  # fraction of peak LR at end of training
 
 # Regularisation
-SILENCE_REG_WEIGHT  = 0.0   # penalise silent neurons
-SPARSITY_REG_WEIGHT = 0.0   # penalise over-active neurons
+SILENCE_REG_WEIGHT = 0.0  # penalise silent neurons
+SPARSITY_REG_WEIGHT = 0.0  # penalise over-active neurons
 
 # Evaluation
 FINAL_EVAL_BATCH_SIZE = 256
@@ -64,7 +64,8 @@ FINAL_EVAL_BATCH_SIZE = 256
 # Model
 # ---------------------------------------------------------------------------
 
-class SHD_SNN(nn.Module):
+
+class ShdSnn(nn.Module):
     """
     2-layer ALIF network for SHD. Adaptive threshold improves temporal coding.
     Linear -> ALIF -> Linear -> ALIF -> Linear -> LI
@@ -79,9 +80,10 @@ class SHD_SNN(nn.Module):
         self.input_proj = nn.Linear(n_input, n_hidden, bias=False)
 
         # Hidden layers: alternating Linear + ALIF
-        self.hidden_linears = [nn.Linear(n_hidden, n_hidden, bias=False) for _ in range(n_layers - 1)]
-        _spike = arctan(k=2.0)
-        self.alif_layers = [ALIF(n_hidden, activation=_spike) for _ in range(n_layers)]
+        self.hidden_linears = [
+            nn.Linear(n_hidden, n_hidden, bias=False) for _ in range(n_layers - 1)
+        ]
+        self.alif_layers = [ALIF(n_hidden) for _ in range(n_layers)]
 
         # Output
         self.output_proj = nn.Linear(n_hidden, n_classes, bias=False)
@@ -95,32 +97,35 @@ class SHD_SNN(nn.Module):
         Returns:
             traces: (T, batch, n_classes) voltage traces for integral loss
         """
-        T, B, _ = x_seq.shape
+        n_t, n_b, _ = x_seq.shape
 
         # Initialise states: ALIF state is (V, threshold_adaptation)
-        alif_states = [alif.initial_state(B) for alif in self.alif_layers]
-        li_state    = self.readout.initial_state(B)
+        alif_states = [alif.initial_state(n_b) for alif in self.alif_layers]
+        li_state = self.readout.initial_state(n_b)
 
         traces = []
-        for t in range(T):
-            x = x_seq[t]                              # (B, n_input)
-            x = self.input_proj(x)                    # (B, n_hidden)
+        for t in range(n_t):
+            x = x_seq[t]  # (n_b, n_input)
+            x = self.input_proj(x)  # (B, n_hidden)
             x, alif_states[0] = self.alif_layers[0](x, alif_states[0])
 
-            for i, (linear, alif) in enumerate(zip(self.hidden_linears, self.alif_layers[1:])):
+            for i, (linear, alif) in enumerate(
+                zip(self.hidden_linears, self.alif_layers[1:], strict=False)
+            ):
                 x = linear(x)
                 x, alif_states[i + 1] = alif(x, alif_states[i + 1])
 
-            x = self.output_proj(x)                   # (B, n_classes)
+            x = self.output_proj(x)  # (B, n_classes)
             v_out, li_state = self.readout(x, li_state)
             traces.append(v_out)
 
-        return mx.stack(traces, axis=0)              # (T, B, n_classes)
+        return mx.stack(traces, axis=0)  # (T, B, n_classes)
 
 
 # ---------------------------------------------------------------------------
 # LR schedule
 # ---------------------------------------------------------------------------
+
 
 def get_lr(step: int, total_steps: int, peak_lr: float) -> float:
     progress = step / max(total_steps, 1)
@@ -135,13 +140,10 @@ def get_lr(step: int, total_steps: int, peak_lr: float) -> float:
 # Training
 # ---------------------------------------------------------------------------
 
+
 def loss_fn(model, x_seq, targets):
     traces = model(x_seq)
-    loss = fn.integral_crossentropy(traces, targets, smoothing=LABEL_SMOOTHING)
-    if SILENCE_REG_WEIGHT > 0:
-        # collect hidden spike traces — not directly exposed here; skip for baseline
-        pass
-    return loss
+    return fn.integral_crossentropy(traces, targets, smoothing=LABEL_SMOOTHING)
 
 
 t_start = time.time()
@@ -150,20 +152,31 @@ mx.random.seed(42)
 print("Loading SHD dataset ...")
 train_ds, test_ds = load_datasets(n_steps=T_STEPS_RUN)
 t_data = time.time()
-print(f"Dataset loaded in {t_data - t_start:.1f}s | "
-      f"train: {train_ds.N} samples, test: {test_ds.N} samples")
+print(
+    f"Dataset loaded in {t_data - t_start:.1f}s | "
+    f"train: {train_ds.N} samples, test: {test_ds.N} samples"
+)
 
-model = SHD_SNN(N_CHANNELS, N_HIDDEN, N_LAYERS, N_CLASSES)
+model = ShdSnn(N_CHANNELS, N_HIDDEN, N_LAYERS, N_CLASSES)
 mx.eval(model.parameters())
 num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
 print(f"Parameters: {num_params / 1e6:.2f}M | hidden: {N_HIDDEN} x {N_LAYERS}")
 
 optimizer = optim.AdamW(learning_rate=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
-loss_and_grad = nn.value_and_grad(model, loss_fn)
+# Compile the training step for speed.
+# inputs/outputs tell MLX which mutable state to track across calls.
+_loss_and_grad = nn.value_and_grad(model, loss_fn)
+state = [model.trainable_parameters(), optimizer.state]
 
-rng = None  # numpy rng, initialised lazily
-import numpy as np
+
+@partial(mx.compile, inputs=state, outputs=state)
+def train_step(x_seq, targets):
+    loss, grads = _loss_and_grad(model, x_seq, targets)
+    optimizer.update(model, grads)
+    return loss
+
+
 rng = np.random.default_rng(42)
 
 total_training_time = 0.0
@@ -171,10 +184,12 @@ step = 0
 t_compiled = None
 smooth_loss = 0.0
 
+steps_per_epoch = math.ceil(train_ds.N / BATCH_SIZE)
+estimated_total_steps = max(1000, steps_per_epoch * 20)
+
 print(f"Time budget: {TIME_BUDGET}s | batch: {BATCH_SIZE} | T: {T_STEPS_RUN}")
 
 while True:
-    # Iterate over training batches, reshuffling each epoch
     for x_batch, y_batch in train_ds.batches(BATCH_SIZE, shuffle=True, rng=rng):
         if step > 0 and total_training_time >= TIME_BUDGET:
             break
@@ -184,17 +199,11 @@ while True:
         # x_batch: (B, T, C) -> transpose to (T, B, C)
         x_seq = x_batch.transpose(1, 0, 2)
 
-        # Estimate total steps for LR schedule (rough)
-        steps_per_epoch = math.ceil(train_ds.N / BATCH_SIZE)
-        # Estimate epochs from first step timing if available; use 1000 as fallback
-        estimated_total_steps = max(1000, steps_per_epoch * 20)
-
         lr = get_lr(step, estimated_total_steps, LEARNING_RATE)
         optimizer.learning_rate = lr
 
-        loss, grads = loss_and_grad(model, x_seq, y_batch)
-        optimizer.update(model, grads)
-        mx.eval(model.parameters(), loss)
+        loss = train_step(x_seq, y_batch)
+        mx.eval(loss)
 
         if t_compiled is None:
             t_compiled = time.time()
@@ -212,8 +221,9 @@ while True:
         remaining = max(0.0, TIME_BUDGET - total_training_time)
         print(
             f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased:.4f} | "
-            f"lr: {lr:.2e} | dt: {dt*1000:.0f}ms | remaining: {remaining:.0f}s    ",
-            end="", flush=True,
+            f"lr: {lr:.2e} | dt: {dt * 1000:.0f}ms | remaining: {remaining:.0f}s    ",
+            end="",
+            flush=True,
         )
 
         if step == 0:
