@@ -1,2 +1,3 @@
 commit	val_bpb	memory_gb	status	description
 ba6ebf6	2.373827	21.2	keep	baseline (M5)
+64825bf	2.023081	21.2	keep	halve batch size to 2^15
