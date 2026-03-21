@@ -4,3 +4,6 @@ ba6ebf6	2.373827	21.2	keep	baseline (M5)
 eae6768	1.771049	21.2	keep	reduce batch to 2^14 with device_batch=8
 2c97573	1.678299	21.2	keep	reduce batch to 2^13 with device_batch=4
 91a4bd6	1.646502	21.2	keep	reduce weight decay to 0.1
+9047d4b	1.652042	21.2	discard	no logit cap + matrix LR 0.02
+c4918d3	1.651997	21.2	discard	no logit cap + matrix LR 0.03
+bf3fef0	1.588533	21.2	keep	SiLU activation instead of GSquare
