@@ -52,11 +52,12 @@ def triangular(k=1.0):
     return _make_spike_fn(_grad, k)
 
 
-def boxcar(k=1.0):
-    """Boxcar surrogate: 1 if |u| < 0.5/k else 0."""
-    def _grad(u, k):
-        return (mx.abs(u) < (0.5 / k)).astype(u.dtype)
-    return _make_spike_fn(_grad, k)
+def boxcar(width=2.0, height=0.5):
+    """Boxcar surrogate: height if |u| < width/2 else 0. Matches spyx default."""
+    half = width / 2.0
+    def _grad(u, k):  # k carries half-width
+        return height * (mx.abs(u) < k).astype(u.dtype)
+    return _make_spike_fn(_grad, half)
 
 
 def straight_through():
