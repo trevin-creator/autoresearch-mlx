@@ -13,8 +13,6 @@ import gc
 import math
 import os
 import time
-from functools import partial
-
 import mlx.core as mx
 import mlx.optimizers as optim
 import numpy as np
@@ -163,18 +161,7 @@ num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
 print(f"Parameters: {num_params / 1e6:.2f}M | hidden: {N_HIDDEN} x {N_LAYERS}")
 
 optimizer = optim.AdamW(learning_rate=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-
-# Compile the training step for speed.
-# inputs/outputs tell MLX which mutable state to track across calls.
-_loss_and_grad = nn.value_and_grad(model, loss_fn)
-state = [model.trainable_parameters(), optimizer.state]
-
-
-@partial(mx.compile, inputs=state, outputs=state)
-def train_step(x_seq, targets):
-    loss, grads = _loss_and_grad(model, x_seq, targets)
-    optimizer.update(model, grads)
-    return loss
+loss_and_grad = nn.value_and_grad(model, loss_fn)
 
 
 rng = np.random.default_rng(42)
@@ -202,8 +189,9 @@ while True:
         lr = get_lr(step, estimated_total_steps, LEARNING_RATE)
         optimizer.learning_rate = lr
 
-        loss = train_step(x_seq, y_batch)
-        mx.eval(loss)
+        loss, grads = loss_and_grad(model, x_seq, y_batch)
+        optimizer.update(model, grads)
+        mx.eval(model.parameters(), optimizer.state, loss)
 
         if t_compiled is None:
             t_compiled = time.time()
