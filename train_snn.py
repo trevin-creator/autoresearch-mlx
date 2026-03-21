@@ -30,6 +30,7 @@ from prepare_snn import (
     load_datasets,
 )
 from spyx_mlx import fn
+from spyx_mlx.axn import arctan
 from spyx_mlx.nn import ALIF, IF, LI, LIF, CuBaLIF, RLIF
 
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -79,7 +80,8 @@ class SHD_SNN(nn.Module):
 
         # Hidden layers: alternating Linear + ALIF
         self.hidden_linears = [nn.Linear(n_hidden, n_hidden, bias=False) for _ in range(n_layers - 1)]
-        self.alif_layers = [ALIF(n_hidden) for _ in range(n_layers)]
+        _spike = arctan(k=2.0)
+        self.alif_layers = [ALIF(n_hidden, activation=_spike) for _ in range(n_layers)]
 
         # Output
         self.output_proj = nn.Linear(n_hidden, n_classes, bias=False)
