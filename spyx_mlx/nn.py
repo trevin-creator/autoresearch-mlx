@@ -25,17 +25,16 @@ import mlx.nn as nn
 from .axn import superspike
 
 
-def _init_decay(shape, init_val=None, default_mean=0.5, default_std=0.25):
+def _init_decay(shape, init_val=None, default=0.9):
     """
     Return an (shape,) MLX parameter for a decay constant in [0, 1].
     If init_val is given, the parameter is fixed (scalar).
-    Otherwise it is learnable, initialised with TruncatedNormal(mean, std)
-    clipped to [0, 1] — matching spyx's default initialisation.
+    Otherwise it is a learnable uniform value initialised at `default`.
+    High default (0.9) suits long-timescale tasks like SHD (128 time bins).
     """
     if init_val is not None:
         return mx.array(float(init_val))
-    raw = mx.random.normal(shape) * default_std + default_mean
-    return mx.clip(raw, 0.0, 1.0)
+    return mx.full(shape, default)
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +59,9 @@ class IF(nn.Module):
         return mx.zeros((batch_size,) + self.hidden_shape)
 
     def __call__(self, x, V):
-        spike = self._spike(V - self.threshold)           # spike on old V
-        V = V + x - spike * self.threshold
+        V = V + x                                         # integrate first
+        spike = self._spike(V - self.threshold)
+        V = V - spike * self.threshold
         return spike, V
 
 
@@ -100,8 +100,9 @@ class LIF(nn.Module):
 
     def __call__(self, x, V):
         beta = self._get_beta()
-        spike = self._spike(V - self.threshold)           # spike on old V
-        V = beta * V + x - spike * self.threshold
+        V = beta * V + x                                  # integrate first
+        spike = self._spike(V - self.threshold)
+        V = V - spike * self.threshold
         return spike, V
 
 
@@ -186,9 +187,10 @@ class CuBaLIF(nn.Module):
 
     def __call__(self, x, state):
         V, I = state[..., 0], state[..., 1]
-        spike = self._spike(V - self.threshold)           # spike on old V
-        I = self._get_alpha() * I + x
-        V = self._get_beta() * V + I - spike * self.threshold
+        I = self._get_alpha() * I + x                    # integrate current
+        V = self._get_beta() * V + I                     # integrate voltage
+        spike = self._spike(V - self.threshold)
+        V = V - spike * self.threshold
         return spike, mx.stack([V, I], axis=-1)
 
 
@@ -237,8 +239,9 @@ class ALIF(nn.Module):
     def __call__(self, x, state):
         V, T = state[..., 0], state[..., 1]
         thresh = self.threshold + T
-        spike = self._spike(V - thresh)                   # spike on old V
-        V = self._get_beta() * V + x - spike * thresh
+        V = self._get_beta() * V + x                     # integrate first
+        spike = self._spike(V - thresh)
+        V = V - spike * thresh
         T = self._get_gamma() * T + (1.0 - self._get_gamma()) * spike
         return spike, mx.stack([V, T], axis=-1)
 
@@ -279,8 +282,9 @@ class RLIF(nn.Module):
 
     def __call__(self, x, state):
         V, s_prev = state[..., 0], state[..., 1]
-        spike = self._spike(V - self.threshold)           # spike on old V
-        V = self._get_beta() * V + x + self.w_rec(s_prev) - spike * self.threshold
+        V = self._get_beta() * V + x + self.w_rec(s_prev)  # integrate first
+        spike = self._spike(V - self.threshold)
+        V = V - spike * self.threshold
         return spike, mx.stack([V, spike], axis=-1)
 
 
