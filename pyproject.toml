@@ -12,4 +12,5 @@ dependencies = [
     "requests>=2.32.0",
     "rustbpe>=0.1.0",
     "tiktoken>=0.11.0",
+    "h5py>=3.0.0",
 ]
