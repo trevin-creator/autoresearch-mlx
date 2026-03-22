@@ -232,6 +232,19 @@ Required comparison rule:
 * report both quality delta and speed/resource delta
 * do not declare a new winner without this ternary-vs-previous-winner check
 
+Quantization strategy exploration rule (mandatory):
+
+* do not use only one float->fixed->ternary path
+* implement and evaluate multiple strategies for best fit on task and hardware
+
+Minimum strategy set to explore:
+
+* Fixed-point rounding: nearest, floor, ceil
+* Fixed-point scaling: fixed scale (Q format) and dynamic max-abs scale
+* Ternary mapping: threshold, mean-scaled threshold, and top-k magnitude ternarization
+
+Treat strategy choice as a search dimension in autoresearch (Optuna or equivalent).
+
 ---
 
 ## Model families to explore
