@@ -24,6 +24,15 @@ uv run train.py
 
 Then point Claude Code or another coding agent at `program.md` and let it run the loop.
 
+## 3D Render
+
+[3D render][stereo event camera simulation]
+
+<video controls width="640" preload="metadata">
+	<source src="assets/stereo-event-camera-simulation-5s.mp4" type="video/mp4" />
+	Your browser does not support the video tag.
+</video>
+
 ## What matters
 
 - `prepare.py` - data prep, tokenizer, dataloader, and evaluation. Treat as fixed.
@@ -76,3 +85,5 @@ The Mac Mini result matters because it did not just rediscover the same exact re
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+[stereo event camera simulation]: assets/stereo-event-camera-simulation-5s.mp4
