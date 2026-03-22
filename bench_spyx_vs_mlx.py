@@ -553,6 +553,12 @@ def main():
         default=False,
         help="Continue timing neurons even if benchmark parity check fails.",
     )
+    parser.add_argument(
+        "--fail-on-bench-parity-mismatch",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Exit non-zero if any benchmark parity precheck mismatches.",
+    )
     parser.add_argument("--bench-parity-batch", type=int, default=8)
     parser.add_argument("--bench-parity-hidden", type=int, default=64)
     parser.add_argument("--bench-parity-steps", type=int, default=16)
@@ -620,6 +626,7 @@ def main():
     failures: list[dict[str, str]] = []
     parity_results: list[ParityCheckResult] = []
     blocked_neurons: set[str] = set()
+    bench_parity_mismatch = False
 
     if args.bench_parity_check and not effective_skip_jax and not args.skip_mlx:
         print("\nRunning benchmark parity prechecks...")
@@ -641,6 +648,7 @@ def main():
                 f"max_abs_state={check.max_abs_state:.3e}, worst_trial={check.worst_trial})"
             )
             if not check.ok:
+                bench_parity_mismatch = True
                 failures.append(
                     {
                         "backend": "bench-parity",
@@ -735,6 +743,7 @@ def main():
             "parity_gate": args.parity_gate,
             "bench_parity_check": args.bench_parity_check,
             "allow_bench_on_parity_fail": args.allow_bench_on_parity_fail,
+            "fail_on_bench_parity_mismatch": args.fail_on_bench_parity_mismatch,
             "bench_parity_batch": args.bench_parity_batch,
             "bench_parity_hidden": args.bench_parity_hidden,
             "bench_parity_steps": args.bench_parity_steps,
@@ -752,6 +761,7 @@ def main():
         "parity_gate_output": parity_output,
         "bench_parity_results": [asdict(r) for r in parity_results],
         "bench_parity_blocked_neurons": sorted(blocked_neurons),
+        "bench_parity_mismatch": bench_parity_mismatch,
     }
     args.json.write_text(json.dumps(payload, indent=2))
 
@@ -797,6 +807,10 @@ def main():
             )
 
     print(f"\nWrote: {args.json}")
+
+    if args.fail_on_bench_parity_mismatch and bench_parity_mismatch:
+        print("Hard-fail enabled: benchmark parity mismatches were detected.")
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":
