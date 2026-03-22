@@ -34,6 +34,16 @@ Third row: per-camera stereo depth ground truth (left depth, right depth).
 Fourth row: overall drone-centric depth ground truth (center camera) and disparity ground truth.
 An IMU overlay shows body-frame acceleration and angular velocity for each frame.
 
+Ground-truth files used in this visualization:
+
+| File | Meaning |
+|---|---|
+| `depth_left/*.npy` | Left camera depth in meters |
+| `depth_right/*.npy` | Right camera depth in meters |
+| `depth_gt/*.npy` | Center (drone-rig) depth in meters |
+| `disparity_gt/*.npy` | Dense stereo disparity in pixels, computed as `fx * baseline_m / depth_left_m` |
+| `meta/imu.csv` | Body-frame acceleration (`acc_b*`) and angular velocity (`gyro_b*`) |
+
 <video controls width="640" preload="metadata">
 	<source src="assets/stereo-event-camera-simulation-10s.mp4" type="video/mp4" />
 	Your browser does not support the video tag.

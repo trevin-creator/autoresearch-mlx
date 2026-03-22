@@ -28,6 +28,9 @@ class EventConfig:
     refractory_us: int = 200
     eps: float = 1e-3
     use_timestamp_interpolation: bool = True
+    photoreceptor_tau_ms: float = 5.0
+    leak_rate_hz: float = 0.5
+    shot_noise_rate_hz: float = 0.5
 
 
 @dataclass(frozen=True)

@@ -21,7 +21,8 @@ train_vision.py / train_snn.py (MLX GPU via spyx_mlx)
 
 The event model follows the ESIM principle: tight coupling between the
 renderer and a per-pixel log-intensity threshold emulator with per-pixel
-threshold mismatch, refractory period, and timestamp interpolation.
+threshold mismatch, refractory period, timestamp interpolation, photoreceptor
+low-pass filtering, and stochastic background events (leak and shot noise).
 
 ## Relationship to the project
 
@@ -44,6 +45,9 @@ offline step that produces standard NumPy files loadable on any platform.
 | C_pos, C_neg | 0.18 | Typical event camera contrast thresholds |
 | Threshold mismatch | Gaussian σ 0.02 | Per-pixel variation |
 | Refractory period | 200 µs | Prevents event avalanche |
+| Photoreceptor tau | 5 ms | First-order low-pass in log-intensity domain |
+| Leak rate | 0.5 Hz/pixel | Background ON activity process |
+| Shot noise rate | 0.5 Hz/pixel | Random ON/OFF stochastic events |
 | Micro-step dt | 1 ms | Higher rate = more fidelity, more events |
 | Event format | `(t_us, x, y, polarity)` | Standard int64 tuple per event |
 | Timestamp interpolation | Enabled | Sub-step event timing via linear interp |
@@ -75,15 +79,15 @@ out_genesis_stereo_events/
   events_right/000000.npz, 000001.npz, ...
   depth_left/000000.npy, ...
   depth_right/000000.npy, ...
-    depth_gt/000000.npy, ...
-    disparity_gt/000000.npy, ...
+  depth_gt/000000.npy, ...
+  disparity_gt/000000.npy, ...
   rgb_left_preview/  (optional, --save-rgb)
   rgb_right_preview/ (optional)
   meta/
     calibration.json   — pinhole intrinsics, stereo extrinsics, timing
     poses.csv          — per-frame rig + left/right camera poses (quat)
     imu.csv            — per-frame body-frame accel + gyro
-        frames.csv         — per-frame file paths (events + depth/disparity GT)
+    frames.csv         — per-frame file paths (events + depth/disparity GT)
 ```
 
 Each `events_*.npz` contains `events` with shape `(N, 4)` and dtype int64:
@@ -101,8 +105,8 @@ datagen/
   __init__.py       — public API re-exports
   config.py         — CameraConfig, StereoConfig, EventConfig, SimConfig, OutputConfig
   math_utils.py     — normalize, lookat_rotation, quat_from_rotmat, rotmat_to_rvec
-    trajectory.py     — ScriptedRigTrajectory (obstacle-aware forward slalom path)
-  emulator.py       — EventCameraEmulator (ESIM-style per-pixel threshold model)
+  trajectory.py     — ScriptedRigTrajectory (obstacle-aware forward slalom path)
+  emulator.py       — EventCameraEmulator (ESIM-style + low-pass + stochastic noise)
   writer.py         — DatasetWriter (events/depth/pose/IMU to disk)
   scene.py          — GenesisStereoEventDataset
                      (Genesis world + stereo rig + main loop)
@@ -134,10 +138,11 @@ used by `ExperimentConfig` in `train_snn.py`, with argparse CLI overrides.
 
 1. **Fidelity is limited by sim_dt** — renders once per step. Adaptive
    sub-stepping when |Δlog I| is large would improve realism.
-2. **No photoreceptor low-pass** — a first-order filter on log intensity
-   would model the DVS analog frontend.
-3. **No leak/shot noise** — background activity rate and hot pixels are
-   not yet modeled.
+2. **Noise model is global-rate** — leak/shot are currently uniform per
+  pixel. Adding intensity-dependent and temperature-dependent noise would
+  better match real sensors.
+3. **No hot/dead pixel map** — fixed defective-pixel maps are not yet
+  modeled.
 4. **Event loop is Python** — the per-pixel iteration is not vectorized.
    For large resolutions or long sequences, a Cython or NumPy-vectorized
    version would speed things up significantly.

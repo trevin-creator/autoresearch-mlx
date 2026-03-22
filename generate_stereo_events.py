@@ -50,6 +50,24 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Refractory period in microseconds",
     )
+    p.add_argument(
+        "--photoreceptor-tau-ms",
+        type=float,
+        default=5.0,
+        help="Photoreceptor low-pass time constant in milliseconds",
+    )
+    p.add_argument(
+        "--leak-rate-hz",
+        type=float,
+        default=0.5,
+        help="Per-pixel leak/background activity rate in Hz",
+    )
+    p.add_argument(
+        "--shot-noise-rate-hz",
+        type=float,
+        default=0.5,
+        help="Per-pixel shot-noise activity rate in Hz",
+    )
 
     # Simulation
     p.add_argument(
@@ -82,6 +100,9 @@ def main() -> None:
         c_neg=args.c_neg,
         threshold_sigma=args.threshold_sigma,
         refractory_us=args.refractory_us,
+        photoreceptor_tau_ms=args.photoreceptor_tau_ms,
+        leak_rate_hz=args.leak_rate_hz,
+        shot_noise_rate_hz=args.shot_noise_rate_hz,
     )
     sim_cfg = SimConfig(
         sim_dt=args.dt,
