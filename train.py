@@ -57,6 +57,36 @@ def get_peak_memory_mb():
     return mx.get_peak_memory() / 1024 / 1024
 
 
+def get_safe_eval_batch_size(default=256, min_batch=4):
+    """Cap eval batch size based on available Metal memory to prevent OOM.
+
+    On 24GB Macs the default batch_size=256 triggers a Metal allocation error
+    because the eval pass requires a single buffer larger than the maximum
+    allowed (~14GB).  We detect total system RAM and scale down accordingly.
+    """
+    import subprocess
+    min_batch = min(min_batch, default)
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        total_ram_gb = int(result.stdout.strip()) / (1024 ** 3)
+    except Exception:
+        total_ram_gb = 16  # conservative fallback
+
+    # Metal's max single-buffer limit is ~75% of system RAM. The eval pass at
+    # batch_size=256 with seq_len=2048 allocates ~16GB in a single buffer,
+    # which exceeds the ~14GB limit on a 24GB Mac (reported in issue #2).
+    # We need ~20GB usable Metal headroom for the full batch_size=256.
+    usable_gb = max(total_ram_gb - 10, 2)
+    safe_batch = int(default * (usable_gb / 20))
+    safe_batch = max(min_batch, min(safe_batch, default))
+    # Round down to nearest power of 2 for alignment
+    safe_batch = 2 ** int(math.log2(safe_batch)) if safe_batch >= 1 else min_batch
+    return safe_batch
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
@@ -200,7 +230,7 @@ class GPT(nn.Module):
         x = norm(x)
         x0 = x
         for i, block in enumerate(self.blocks):
-            x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
+            x = self.resid_lambdas[i].astype(x.dtype) * x + self.x0_lambdas[i].astype(x.dtype) * x0
             ve = self.value_embeds[str(i)](idx) if str(i) in self.value_embeds else None
             x = block(x, ve, masks[i])
         x = norm(x)
@@ -375,7 +405,7 @@ FINAL_LR_FRAC = 0.0
 # Model size
 DEPTH = 4
 DEVICE_BATCH_SIZE = 16
-FINAL_EVAL_BATCH_SIZE = 256
+FINAL_EVAL_BATCH_SIZE = get_safe_eval_batch_size(default=256)
 STARTUP_EXCLUDE_STEPS = 1
 
 
@@ -466,7 +496,7 @@ while True:
     mx.eval(model.parameters(), *optimizer.state)
 
     train_loss_f = float(train_loss.item())
-    if train_loss_f > 100:
+    if not math.isfinite(train_loss_f) or train_loss_f > 100:
         print("FAIL")
         raise SystemExit(1)
 
