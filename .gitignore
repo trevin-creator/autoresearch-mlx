@@ -31,8 +31,26 @@ TEST_COMMIT.txt
 bench_*.json
 
 # Local-only research / scratch notes
-biomimicry.md
-
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md
+
+# Generated / large media assets — do not commit video files
+*.mp4
+*.avi
+*.mov
+
+# Experiment result tables (generated locally)
+results*.tsv
+
+# spyx upstream library clone (has its own .git; not our code)
+spyx/
+
+# Local experiment / analysis scripts that are not part of the core package
+analyze_experiments.py
+calibrate_snn_ptq.py
+
+# Planning / AI-session markdown scratch pads
+program.md
+program_snn.md
+data_generation.md
