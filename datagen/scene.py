@@ -10,6 +10,7 @@ Requires the ``genesis`` package (``pip install genesis-world``).
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,31 @@ class GenesisStereoEventDataset:
         self.sim_cfg = sim_cfg
         self.out_cfg = out_cfg
 
+        self.left_cam_cfg = cam_cfg
+        right_dist = (
+            float(cam_cfg.distortion[0]) * float(stereo_cfg.right_distortion_scale),
+            float(cam_cfg.distortion[1]) * float(stereo_cfg.right_distortion_scale),
+            float(cam_cfg.distortion[2]) * float(stereo_cfg.right_distortion_scale),
+            float(cam_cfg.distortion[3]) * float(stereo_cfg.right_distortion_scale),
+            float(cam_cfg.distortion[4]) * float(stereo_cfg.right_distortion_scale),
+        )
+        self.right_cam_cfg = replace(
+            cam_cfg,
+            fov_deg=float(cam_cfg.fov_deg) + float(stereo_cfg.right_fov_delta_deg),
+            read_noise_e=float(cam_cfg.read_noise_e)
+            * float(stereo_cfg.right_read_noise_scale),
+            dark_current_e_s=float(cam_cfg.dark_current_e_s)
+            * float(stereo_cfg.right_dark_current_scale),
+            vignette_strength=float(cam_cfg.vignette_strength)
+            * float(stereo_cfg.right_vignette_scale),
+            lens_blur_sigma_px=max(
+                0.0,
+                float(cam_cfg.lens_blur_sigma_px)
+                + float(stereo_cfg.right_blur_delta_px),
+            ),
+            distortion=right_dist,
+        )
+
         self.rng = np.random.default_rng(sim_cfg.seed)
         self.writer = DatasetWriter(out_cfg.out_dir)
         self.trajectory = ScriptedRigTrajectory()
@@ -70,15 +96,77 @@ class GenesisStereoEventDataset:
         left_seed = int(self.rng.integers(0, 2**31 - 1))
         right_seed = int(self.rng.integers(0, 2**31 - 1))
         self.left_sensor_model = SensorImageModel(
-            cam_cfg=cam_cfg,
+            cam_cfg=self.left_cam_cfg,
             sim_dt_s=sim_cfg.sim_dt,
             rng=np.random.default_rng(left_seed),
         )
         self.right_sensor_model = SensorImageModel(
-            cam_cfg=cam_cfg,
+            cam_cfg=self.right_cam_cfg,
             sim_dt_s=sim_cfg.sim_dt,
             rng=np.random.default_rng(right_seed),
         )
+
+    @staticmethod
+    def _euler_xyz_rotmat(euler_deg: tuple[float, float, float]) -> np.ndarray:
+        r, p, y = [math.radians(v) for v in euler_deg]
+        cr, sr = math.cos(r), math.sin(r)
+        cp, sp = math.cos(p), math.sin(p)
+        cy, sy = math.cos(y), math.sin(y)
+
+        Rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
+        Ry = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]])
+        Rz = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]])
+        return Rz @ Ry @ Rx
+
+    def _rotor_speeds_hz(self, t: float) -> np.ndarray:
+        kin = self.trajectory.kinematics(t)
+        acc_w = np.asarray(kin["acc_w"], dtype=np.float64)
+        omega_b = np.asarray(kin["omega_body"], dtype=np.float64)
+
+        a_excess = abs(np.linalg.norm(acc_w) - 9.81) / 9.81
+        omega_term = np.linalg.norm(omega_b) * 0.05
+        throttle = 1.0 + self.sim_cfg.rotor_throttle_gain * (a_excess + omega_term)
+        base_hz = max(0.0, float(self.sim_cfg.rotor_base_hz) * float(throttle))
+
+        imbalance = float(np.clip(self.sim_cfg.rotor_imbalance, 0.0, 0.5))
+        pattern = np.array([1.0 + imbalance, 1.0 - imbalance, 1.0, 1.0], dtype=float)
+        return base_hz * pattern
+
+    def _vibration_pose_delta(
+        self, t: float, R_wc: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        trans_amp = max(float(self.sim_cfg.vibration_trans_amp_m), 0.0)
+        rot_amp = max(float(self.sim_cfg.vibration_rot_amp_deg), 0.0)
+        if trans_amp <= 0.0 and rot_amp <= 0.0:
+            return np.zeros(3, dtype=np.float64), np.eye(3)
+
+        rotor_hz = self._rotor_speeds_hz(t)
+        blade_pass_hz = max(2.0 * float(np.mean(rotor_hz)), 1.0)
+        w = 2.0 * math.pi * blade_pass_hz
+        wt = w * t
+
+        trans_body = trans_amp * np.array(
+            [
+                math.sin(wt),
+                math.sin(1.11 * wt + 0.9),
+                math.sin(0.93 * wt + 1.7),
+            ],
+            dtype=np.float64,
+        )
+        trans_world = R_wc @ trans_body
+
+        rot_vec_deg = rot_amp * np.array(
+            [
+                math.sin(1.03 * wt + 0.2),
+                math.sin(0.97 * wt + 1.4),
+                math.sin(1.17 * wt + 2.1),
+            ],
+            dtype=np.float64,
+        )
+        R_vib = self._euler_xyz_rotmat(
+            (float(rot_vec_deg[0]), float(rot_vec_deg[1]), float(rot_vec_deg[2]))
+        )
+        return trans_world, R_vib
 
     @staticmethod
     def _checker_texture(
@@ -302,18 +390,18 @@ class GenesisStereoEventDataset:
 
         half_b = self.stereo_cfg.baseline_m / 2.0
         self.left_cam = self.scene.add_camera(
-            res=(self.cam_cfg.width, self.cam_cfg.height),
+            res=(self.left_cam_cfg.width, self.left_cam_cfg.height),
             pos=(0.0, -half_b, 1.2),
             lookat=(1.0, -half_b, 1.2),
             up=self.stereo_cfg.rig_up_world,
-            fov=self.cam_cfg.fov_deg,
+            fov=self.left_cam_cfg.fov_deg,
         )
         self.right_cam = self.scene.add_camera(
-            res=(self.cam_cfg.width, self.cam_cfg.height),
+            res=(self.right_cam_cfg.width, self.right_cam_cfg.height),
             pos=(0.0, half_b, 1.2),
             lookat=(1.0, half_b, 1.2),
             up=self.stereo_cfg.rig_up_world,
-            fov=self.cam_cfg.fov_deg,
+            fov=self.right_cam_cfg.fov_deg,
         )
         self.center_cam = self.scene.add_camera(
             res=(self.cam_cfg.width, self.cam_cfg.height),
@@ -336,45 +424,69 @@ class GenesisStereoEventDataset:
     ) -> dict[str, np.ndarray]:
         right_axis = R_wc[:, 0]
         forward_axis = R_wc[:, 2]
-        up_axis = normalize(np.cross(right_axis, forward_axis))
 
         half_b = 0.5 * self.stereo_cfg.baseline_m
-        left_pos = rig_pos - half_b * right_axis
-        right_pos = rig_pos + half_b * right_axis
+        left_pos = (
+            rig_pos
+            - half_b * right_axis
+            + R_wc @ np.asarray(self.stereo_cfg.left_mount_offset_m, dtype=np.float64)
+        )
+        right_pos = (
+            rig_pos
+            + half_b * right_axis
+            + R_wc @ np.asarray(self.stereo_cfg.right_mount_offset_m, dtype=np.float64)
+        )
+
+        left_mount_R = R_wc @ self._euler_xyz_rotmat(self.stereo_cfg.left_mount_rpy_deg)
+        right_mount_R = R_wc @ self._euler_xyz_rotmat(
+            self.stereo_cfg.right_mount_rpy_deg
+        )
+
+        left_forward = left_mount_R[:, 2]
+        right_forward = right_mount_R[:, 2]
+        left_up = normalize(left_mount_R[:, 1])
+        right_up = normalize(right_mount_R[:, 1])
 
         return {
             "left_pos": left_pos,
             "right_pos": right_pos,
-            "left_lookat": left_pos + forward_axis,
-            "right_lookat": right_pos + forward_axis,
-            "up": up_axis,
+            "left_lookat": left_pos + left_forward,
+            "right_lookat": right_pos + right_forward,
+            "left_up": left_up,
+            "right_up": right_up,
+            "center_forward": forward_axis,
+            "center_up": normalize(R_wc[:, 1]),
         }
 
     def update_camera_poses(self, t: float) -> dict[str, np.ndarray]:
-        rig_pos, R_wc = self.trajectory.pose(t)
+        rig_pos_nom, R_wc_nom = self.trajectory.pose(t)
+        trans_vib, R_vib = self._vibration_pose_delta(t, R_wc_nom)
+        rig_pos = rig_pos_nom + trans_vib
+        R_wc = R_wc_nom @ R_vib
         rig_quat = quat_from_rotmat(R_wc)
 
         poses = self.stereo_poses_from_rig(rig_pos, R_wc)
-        left_R = lookat_rotation(poses["left_pos"], poses["left_lookat"], poses["up"])
+        left_R = lookat_rotation(
+            poses["left_pos"], poses["left_lookat"], poses["left_up"]
+        )
         right_R = lookat_rotation(
-            poses["right_pos"], poses["right_lookat"], poses["up"]
+            poses["right_pos"], poses["right_lookat"], poses["right_up"]
         )
 
         self.left_cam.set_pose(
             pos=tuple(poses["left_pos"].tolist()),
             lookat=tuple(poses["left_lookat"].tolist()),
-            up=tuple(poses["up"].tolist()),
+            up=tuple(poses["left_up"].tolist()),
         )
         self.right_cam.set_pose(
             pos=tuple(poses["right_pos"].tolist()),
             lookat=tuple(poses["right_lookat"].tolist()),
-            up=tuple(poses["up"].tolist()),
+            up=tuple(poses["right_up"].tolist()),
         )
-        rig_forward = R_wc[:, 2]
         self.center_cam.set_pose(
             pos=tuple(rig_pos.tolist()),
-            lookat=tuple((rig_pos + rig_forward).tolist()),
-            up=tuple(poses["up"].tolist()),
+            lookat=tuple((rig_pos + poses["center_forward"]).tolist()),
+            up=tuple(poses["center_up"].tolist()),
         )
 
         return {
@@ -433,8 +545,8 @@ class GenesisStereoEventDataset:
         """Compute dense disparity GT (pixels) from left depth and stereo intrinsics."""
         fx = (
             0.5
-            * self.cam_cfg.width
-            / math.tan(math.radians(self.cam_cfg.fov_deg) / 2.0)
+            * self.left_cam_cfg.width
+            / math.tan(math.radians(self.left_cam_cfg.fov_deg) / 2.0)
         )
         baseline = self.stereo_cfg.baseline_m
         depth = np.asarray(depth_left, dtype=np.float32)
@@ -450,7 +562,12 @@ class GenesisStereoEventDataset:
 
     def run(self) -> None:
         self.build_scene()
-        self.writer.write_calibration(self.cam_cfg, self.stereo_cfg, self.sim_cfg)
+        self.writer.write_calibration(
+            left_cam_cfg=self.left_cam_cfg,
+            right_cam_cfg=self.right_cam_cfg,
+            stereo_cfg=self.stereo_cfg,
+            sim_cfg=self.sim_cfg,
+        )
 
         n_steps = int(round(self.sim_cfg.duration_s / self.sim_cfg.sim_dt))
 

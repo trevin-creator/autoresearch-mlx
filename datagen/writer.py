@@ -225,48 +225,89 @@ class DatasetWriter:
 
     def write_calibration(
         self,
-        cam_cfg: CameraConfig,
+        left_cam_cfg: CameraConfig,
+        right_cam_cfg: CameraConfig,
         stereo_cfg: StereoConfig,
         sim_cfg: SimConfig,
     ) -> None:
-        fx = fy = 0.5 * cam_cfg.width / math.tan(math.radians(cam_cfg.fov_deg) / 2.0)
-        cx = (cam_cfg.width - 1) / 2.0
-        cy = (cam_cfg.height - 1) / 2.0
+        fx_l = fy_l = (
+            0.5
+            * left_cam_cfg.width
+            / math.tan(math.radians(left_cam_cfg.fov_deg) / 2.0)
+        )
+        cx_l = (left_cam_cfg.width - 1) / 2.0
+        cy_l = (left_cam_cfg.height - 1) / 2.0
+
+        fx_r = fy_r = (
+            0.5
+            * right_cam_cfg.width
+            / math.tan(math.radians(right_cam_cfg.fov_deg) / 2.0)
+        )
+        cx_r = (right_cam_cfg.width - 1) / 2.0
+        cy_r = (right_cam_cfg.height - 1) / 2.0
 
         calib = {
             "camera_model": "pinhole",
-            "resolution": {"width": cam_cfg.width, "height": cam_cfg.height},
+            "resolution": {
+                "left": {"width": left_cam_cfg.width, "height": left_cam_cfg.height},
+                "right": {
+                    "width": right_cam_cfg.width,
+                    "height": right_cam_cfg.height,
+                },
+            },
             "sensor": {
-                "profile": cam_cfg.sensor_profile,
-                "shutter_model": cam_cfg.shutter_model,
-                "pixel_size_um": cam_cfg.pixel_size_um,
-                "full_well_e": cam_cfg.full_well_e,
-                "read_noise_e": cam_cfg.read_noise_e,
-                "dark_current_e_s": cam_cfg.dark_current_e_s,
-                "exposure_ratio": cam_cfg.exposure_ratio,
+                "left": {
+                    "profile": left_cam_cfg.sensor_profile,
+                    "shutter_model": left_cam_cfg.shutter_model,
+                    "pixel_size_um": left_cam_cfg.pixel_size_um,
+                    "full_well_e": left_cam_cfg.full_well_e,
+                    "read_noise_e": left_cam_cfg.read_noise_e,
+                    "dark_current_e_s": left_cam_cfg.dark_current_e_s,
+                    "exposure_ratio": left_cam_cfg.exposure_ratio,
+                },
+                "right": {
+                    "profile": right_cam_cfg.sensor_profile,
+                    "shutter_model": right_cam_cfg.shutter_model,
+                    "pixel_size_um": right_cam_cfg.pixel_size_um,
+                    "full_well_e": right_cam_cfg.full_well_e,
+                    "read_noise_e": right_cam_cfg.read_noise_e,
+                    "dark_current_e_s": right_cam_cfg.dark_current_e_s,
+                    "exposure_ratio": right_cam_cfg.exposure_ratio,
+                },
             },
             "lens": {
                 "model": "radial_tangential",
-                "distortion": list(cam_cfg.distortion),
-                "vignette_strength": cam_cfg.vignette_strength,
-                "psf_blur_sigma_px": cam_cfg.lens_blur_sigma_px,
+                "left": {
+                    "distortion": list(left_cam_cfg.distortion),
+                    "vignette_strength": left_cam_cfg.vignette_strength,
+                    "psf_blur_sigma_px": left_cam_cfg.lens_blur_sigma_px,
+                },
+                "right": {
+                    "distortion": list(right_cam_cfg.distortion),
+                    "vignette_strength": right_cam_cfg.vignette_strength,
+                    "psf_blur_sigma_px": right_cam_cfg.lens_blur_sigma_px,
+                },
             },
             "intrinsics_left": {
-                "fx": fx,
-                "fy": fy,
-                "cx": cx,
-                "cy": cy,
-                "distortion": list(cam_cfg.distortion),
+                "fx": fx_l,
+                "fy": fy_l,
+                "cx": cx_l,
+                "cy": cy_l,
+                "distortion": list(left_cam_cfg.distortion),
             },
             "intrinsics_right": {
-                "fx": fx,
-                "fy": fy,
-                "cx": cx,
-                "cy": cy,
-                "distortion": list(cam_cfg.distortion),
+                "fx": fx_r,
+                "fy": fy_r,
+                "cx": cx_r,
+                "cy": cy_r,
+                "distortion": list(right_cam_cfg.distortion),
             },
             "stereo": {
                 "baseline_m": stereo_cfg.baseline_m,
+                "left_mount_offset_m": list(stereo_cfg.left_mount_offset_m),
+                "right_mount_offset_m": list(stereo_cfg.right_mount_offset_m),
+                "left_mount_rpy_deg": list(stereo_cfg.left_mount_rpy_deg),
+                "right_mount_rpy_deg": list(stereo_cfg.right_mount_rpy_deg),
                 "T_right_from_left": [
                     [1.0, 0.0, 0.0, stereo_cfg.baseline_m],
                     [0.0, 1.0, 0.0, 0.0],
@@ -285,6 +326,13 @@ class DatasetWriter:
             "timing": {
                 "sim_dt_s": sim_cfg.sim_dt,
                 "time_unit": "microseconds",
+            },
+            "vibration_model": {
+                "rotor_base_hz": sim_cfg.rotor_base_hz,
+                "rotor_throttle_gain": sim_cfg.rotor_throttle_gain,
+                "rotor_imbalance": sim_cfg.rotor_imbalance,
+                "translation_amplitude_m": sim_cfg.vibration_trans_amp_m,
+                "rotation_amplitude_deg": sim_cfg.vibration_rot_amp_deg,
             },
         }
 

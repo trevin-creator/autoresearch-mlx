@@ -20,12 +20,7 @@ from datagen.scene import GenesisStereoEventDataset
 from datagen.sensor_models import available_sensor_profiles, get_sensor_profile
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Generate stereo event camera data via Genesis + ESIM emulator.",
-    )
-
-    # Camera
+def _add_camera_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--width", type=int, default=346)
     p.add_argument("--height", type=int, default=260)
     p.add_argument("--fov", type=float, default=90.0, help="Horizontal FOV in degrees")
@@ -54,12 +49,62 @@ def parse_args() -> argparse.Namespace:
         help="Override lens PSF blur sigma in pixels (None uses profile default)",
     )
 
-    # Stereo
+
+def _add_stereo_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--baseline", type=float, default=0.10, help="Stereo baseline in metres"
     )
+    p.add_argument("--left-offset-x", type=float, default=0.0)
+    p.add_argument("--left-offset-y", type=float, default=0.0)
+    p.add_argument("--left-offset-z", type=float, default=0.0)
+    p.add_argument("--right-offset-x", type=float, default=0.0)
+    p.add_argument("--right-offset-y", type=float, default=0.0)
+    p.add_argument("--right-offset-z", type=float, default=0.0)
+    p.add_argument("--left-roll-deg", type=float, default=0.0)
+    p.add_argument("--left-pitch-deg", type=float, default=0.0)
+    p.add_argument("--left-yaw-deg", type=float, default=0.0)
+    p.add_argument("--right-roll-deg", type=float, default=0.0)
+    p.add_argument("--right-pitch-deg", type=float, default=0.0)
+    p.add_argument("--right-yaw-deg", type=float, default=0.0)
+    p.add_argument(
+        "--right-fov-delta-deg",
+        type=float,
+        default=0.0,
+        help="Extra FOV applied only to right camera",
+    )
+    p.add_argument(
+        "--right-read-noise-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor for right camera read noise",
+    )
+    p.add_argument(
+        "--right-dark-current-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor for right camera dark current",
+    )
+    p.add_argument(
+        "--right-vignette-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor for right camera vignette strength",
+    )
+    p.add_argument(
+        "--right-blur-delta-px",
+        type=float,
+        default=0.0,
+        help="Additive blur sigma offset for right camera",
+    )
+    p.add_argument(
+        "--right-distortion-scale",
+        type=float,
+        default=1.0,
+        help="Scale all right-camera distortion coefficients",
+    )
 
-    # Event model
+
+def _add_event_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--c-pos", type=float, default=0.18, help="Positive contrast threshold"
     )
@@ -118,7 +163,8 @@ def parse_args() -> argparse.Namespace:
         help="Gaussian timestamp jitter std-dev in microseconds",
     )
 
-    # Simulation
+
+def _add_simulation_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--dt", type=float, default=0.001, help="Simulation micro-step in seconds"
     )
@@ -131,10 +177,52 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=1234)
     p.add_argument("--backend", choices=["gpu", "cpu"], default="gpu")
     p.add_argument("--viewer", action="store_true", help="Show Genesis viewer")
+    p.add_argument(
+        "--rotor-base-hz",
+        type=float,
+        default=90.0,
+        help="Nominal rotor speed for vibration model",
+    )
+    p.add_argument(
+        "--rotor-throttle-gain",
+        type=float,
+        default=0.15,
+        help="Rotor speed sensitivity to maneuver intensity",
+    )
+    p.add_argument(
+        "--rotor-imbalance",
+        type=float,
+        default=0.0,
+        help="Rotor imbalance fraction in [0, 0.5]",
+    )
+    p.add_argument(
+        "--vibration-trans-amp-mm",
+        type=float,
+        default=0.0,
+        help="Camera-rig vibration translation amplitude in millimeters",
+    )
+    p.add_argument(
+        "--vibration-rot-amp-deg",
+        type=float,
+        default=0.0,
+        help="Camera-rig vibration angular amplitude in degrees",
+    )
 
-    # Output
+
+def _add_output_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--out-dir", type=str, default="./out_genesis_stereo_events")
     p.add_argument("--save-rgb", action="store_true", help="Save RGB preview frames")
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Generate stereo event camera data via Genesis + ESIM emulator.",
+    )
+    _add_camera_args(p)
+    _add_stereo_args(p)
+    _add_event_args(p)
+    _add_simulation_args(p)
+    _add_output_args(p)
 
     return p.parse_args()
 
@@ -174,7 +262,31 @@ def main() -> None:
             else float(args.lens_blur_sigma_px)
         ),
     )
-    stereo_cfg = StereoConfig(baseline_m=args.baseline)
+    stereo_cfg = StereoConfig(
+        baseline_m=args.baseline,
+        left_mount_offset_m=(
+            args.left_offset_x,
+            args.left_offset_y,
+            args.left_offset_z,
+        ),
+        right_mount_offset_m=(
+            args.right_offset_x,
+            args.right_offset_y,
+            args.right_offset_z,
+        ),
+        left_mount_rpy_deg=(args.left_roll_deg, args.left_pitch_deg, args.left_yaw_deg),
+        right_mount_rpy_deg=(
+            args.right_roll_deg,
+            args.right_pitch_deg,
+            args.right_yaw_deg,
+        ),
+        right_fov_delta_deg=args.right_fov_delta_deg,
+        right_read_noise_scale=args.right_read_noise_scale,
+        right_dark_current_scale=args.right_dark_current_scale,
+        right_vignette_scale=args.right_vignette_scale,
+        right_blur_delta_px=args.right_blur_delta_px,
+        right_distortion_scale=args.right_distortion_scale,
+    )
     event_cfg = EventConfig(
         c_pos=args.c_pos,
         c_neg=args.c_neg,
@@ -195,6 +307,11 @@ def main() -> None:
         seed=args.seed,
         backend=args.backend,
         show_viewer=args.viewer,
+        rotor_base_hz=args.rotor_base_hz,
+        rotor_throttle_gain=args.rotor_throttle_gain,
+        rotor_imbalance=args.rotor_imbalance,
+        vibration_trans_amp_m=args.vibration_trans_amp_mm * 1e-3,
+        vibration_rot_amp_deg=args.vibration_rot_amp_deg,
     )
     out_cfg = OutputConfig(out_dir=args.out_dir, save_rgb_preview=args.save_rgb)
 

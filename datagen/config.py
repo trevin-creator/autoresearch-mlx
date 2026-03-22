@@ -28,6 +28,16 @@ class CameraConfig:
 class StereoConfig:
     baseline_m: float = 0.10
     rig_up_world: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    left_mount_offset_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_mount_offset_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    left_mount_rpy_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_mount_rpy_deg: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    right_fov_delta_deg: float = 0.0
+    right_read_noise_scale: float = 1.0
+    right_dark_current_scale: float = 1.0
+    right_vignette_scale: float = 1.0
+    right_blur_delta_px: float = 0.0
+    right_distortion_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -55,6 +65,11 @@ class SimConfig:
     seed: int = 1234
     backend: str = "gpu"
     show_viewer: bool = False
+    rotor_base_hz: float = 90.0
+    rotor_throttle_gain: float = 0.15
+    rotor_imbalance: float = 0.0
+    vibration_trans_amp_m: float = 0.0
+    vibration_rot_amp_deg: float = 0.0
 
 
 @dataclass(frozen=True)
