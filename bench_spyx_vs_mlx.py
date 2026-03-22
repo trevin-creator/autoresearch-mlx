@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import importlib.metadata
 import json
 import subprocess
@@ -57,6 +58,47 @@ class ParityCheckResult:
     max_abs_state: float
     worst_trial: int
     message: str
+
+
+def _aggregate_speedup_stats(
+    rows: list[BenchResult], jax_backend_name: str, mlx_backend_name: str
+):
+    pairs = []
+    for r in rows:
+        if r.backend != jax_backend_name:
+            continue
+        m = next(
+            (
+                x
+                for x in rows
+                if x.neuron == r.neuron
+                and x.config == r.config
+                and x.backend == mlx_backend_name
+            ),
+            None,
+        )
+        if m is None or m.ms_per_step <= 0:
+            continue
+        pairs.append(r.ms_per_step / m.ms_per_step)
+
+    if not pairs:
+        return {
+            "count": 0,
+            "geomean_speedup": None,
+            "median_speedup": None,
+            "win_rate": None,
+        }
+
+    arr = np.array(pairs, dtype=np.float64)
+    geomean = float(math.exp(np.mean(np.log(arr))))
+    median = float(np.median(arr))
+    win_rate = float(np.mean(arr > 1.0))
+    return {
+        "count": int(arr.size),
+        "geomean_speedup": geomean,
+        "median_speedup": median,
+        "win_rate": win_rate,
+    }
 
 
 def _parse_semver(version: str) -> tuple[int, int, int]:
@@ -566,6 +608,30 @@ def main():
     parser.add_argument("--bench-parity-seed", type=int, default=123)
     parser.add_argument("--bench-parity-atol", type=float, default=1e-5)
     parser.add_argument("--bench-parity-rtol", type=float, default=1e-5)
+    parser.add_argument(
+        "--max-allowed-cv",
+        type=float,
+        default=0.35,
+        help="Maximum allowed coefficient of variation for timed results (higher means noisy run).",
+    )
+    parser.add_argument(
+        "--enforce-mlx-better",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Exit non-zero unless aggregate MLX speedup beats JAX and stability checks pass.",
+    )
+    parser.add_argument(
+        "--min-geomean-speedup",
+        type=float,
+        default=1.0,
+        help="Minimum aggregate geometric-mean speedup required when enforcement is enabled.",
+    )
+    parser.add_argument(
+        "--min-win-rate",
+        type=float,
+        default=0.5,
+        help="Minimum fraction of configs where MLX must beat JAX when enforcement is enabled.",
+    )
     args = parser.parse_args()
 
     if args.mlx_device == "cpu":
@@ -751,6 +817,10 @@ def main():
             "bench_parity_seed": args.bench_parity_seed,
             "bench_parity_atol": args.bench_parity_atol,
             "bench_parity_rtol": args.bench_parity_rtol,
+            "max_allowed_cv": args.max_allowed_cv,
+            "enforce_mlx_better": args.enforce_mlx_better,
+            "min_geomean_speedup": args.min_geomean_speedup,
+            "min_win_rate": args.min_win_rate,
             "jax_backend": jax.default_backend(),
             "mlx_default_device": str(mx.default_device()),
             "jax_stack": jax_stack,
@@ -763,6 +833,11 @@ def main():
         "bench_parity_blocked_neurons": sorted(blocked_neurons),
         "bench_parity_mismatch": bench_parity_mismatch,
     }
+
+    aggregate = _aggregate_speedup_stats(rows, jax_backend_name, mlx_backend_name)
+    noisy_rows = [asdict(r) for r in rows if r.coeff_var > args.max_allowed_cv]
+    payload["aggregate"] = aggregate
+    payload["noisy_rows"] = noisy_rows
     args.json.write_text(json.dumps(payload, indent=2))
 
     print("\nSummary (ms/step, lower is better):")
@@ -806,11 +881,38 @@ def main():
                 f"{item['backend']} {item['neuron']} {item['config']}: {item['error']}"
             )
 
+    if aggregate["count"]:
+        print("\nAggregate:")
+        print(
+            "pairs={} geomean_speedup={:.3f}x median_speedup={:.3f}x win_rate={:.1%}".format(
+                aggregate["count"],
+                aggregate["geomean_speedup"],
+                aggregate["median_speedup"],
+                aggregate["win_rate"],
+            )
+        )
+    if noisy_rows:
+        print(f"Noisy timed rows (cv > {args.max_allowed_cv:.2f}): {len(noisy_rows)}")
+
     print(f"\nWrote: {args.json}")
 
     if args.fail_on_bench_parity_mismatch and bench_parity_mismatch:
         print("Hard-fail enabled: benchmark parity mismatches were detected.")
         raise SystemExit(3)
+
+    if args.enforce_mlx_better:
+        geomean = aggregate["geomean_speedup"]
+        win_rate = aggregate["win_rate"]
+        if (
+            aggregate["count"] == 0
+            or geomean is None
+            or win_rate is None
+            or geomean < args.min_geomean_speedup
+            or win_rate < args.min_win_rate
+            or len(noisy_rows) > 0
+        ):
+            print("Enforcement failed: MLX benchmark quality/speed targets not met.")
+            raise SystemExit(4)
 
 
 if __name__ == "__main__":
