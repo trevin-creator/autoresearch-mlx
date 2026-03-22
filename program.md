@@ -213,6 +213,27 @@ Do not optimize for low memory usage unless it is required for stability.
 
 ---
 
+## Winning Model Benchmark Protocol (mandatory)
+
+When a new winning solution is found, benchmark it against quantized clones before promoting it.
+
+Run these three stages with the same architecture and equivalent training setup:
+
+* **Stage A — Spyx float model**
+   Reference training model on MLX.
+* **Stage B — fixed-point Spyx clone**
+   Same architecture, hardware-like arithmetic.
+* **Stage C — ternary-weight Spyx clone**
+   Same as Stage B, but weights in `{-1,0,+1}`.
+
+Required comparison rule:
+
+* always compare the current winning solution against the previous winning solution in **Stage C (ternary)**
+* report both quality delta and speed/resource delta
+* do not declare a new winner without this ternary-vs-previous-winner check
+
+---
+
 ## Model families to explore
 
 You must actively explore across:
