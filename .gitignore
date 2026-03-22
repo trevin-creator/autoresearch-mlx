@@ -47,6 +47,9 @@ build-2-closeout.md
 # Experiment result tables (generated locally)
 results*.tsv
 
+# Optuna / Verilator trial artifacts (generated locally)
+experiments/
+
 # spyx upstream library clone (has its own .git; not our code)
 spyx/
 
