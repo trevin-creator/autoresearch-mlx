@@ -52,11 +52,27 @@ Longer overnight runs on the working MLX port pushed much further. The long Mac 
 
 | Machine | Current best | Starting point | Repeated wins |
 |---|---:|---:|---|
+| M5 | 1.588533 | 2.373827 | smaller batch (2^13), SiLU activation, lower weight decay |
 | M4 Max #1 | 1.294526 | 1.596971 | AdamW-only, low matrix LR, 3x MLP, no logit cap, moderate weight decay |
 | M4 Max #2 | 1.330509 | 1.807902 | leaner batch, long anneal, SiLU, lower regularization, no logit cap |
 | Mac Mini (long run) | 1.353329 | 1.922472 | Muon, sharper attention, smaller MLP, lower scalar LR |
 
 The Mac Mini result matters because it did not just rediscover the same exact recipe. On smaller Apple Silicon hardware, the strongest changes leaned toward more aggressive step-efficiency wins. Later transfer tests showed some of those Mac Mini findings did not carry cleanly onto the Max baseline, which is exactly the kind of hardware-specific behavior this loop is useful for uncovering.
+
+### M5 experiment log
+
+18 experiments were conducted on an Apple M5 chip. The biggest lever was reducing batch size from 2^16 to 2^13 (more optimizer steps in the fixed 5-minute budget). SiLU activation replaced GSquare for a further 3.5% improvement.
+
+| val_bpb | Status | Description |
+|---:|---|---|
+| 2.374 | keep | baseline |
+| 2.023 | keep | batch 2^15 |
+| 1.771 | keep | batch 2^14 |
+| 1.678 | keep | batch 2^13 |
+| 1.647 | keep | weight decay 0.1 |
+| **1.589** | **keep** | **SiLU activation** |
+
+See `results.tsv` for the full log including discarded experiments.
 
 ## Differences from upstream
 
