@@ -7,3 +7,12 @@ eae6768	1.771049	21.2	keep	reduce batch to 2^14 with device_batch=8
 9047d4b	1.652042	21.2	discard	no logit cap + matrix LR 0.02
 c4918d3	1.651997	21.2	discard	no logit cap + matrix LR 0.03
 bf3fef0	1.588533	21.2	keep	SiLU activation instead of GSquare
+86d6456	1.597418	21.2	discard	SiLU + remove logit cap
+64eadf1	1.670989	21.2	discard	SiLU + matrix LR 0.06
+9c9c49e	1.660849	21.2	discard	SiLU + weight decay 0.05
+7b77118	1.685225	21.2	discard	SiLU + Adam beta2 0.99
+fd8238e	1.621614	21.2	discard	SiLU + scalar LR 0.25
+04274e2	1.654364	21.2	discard	GELU instead of SiLU
+1986cd6	1.600228	21.2	discard	SiLU + unembedding LR 0.008
+33e18cc	1.666821	21.2	discard	cosine warmdown
+5b76a60	4.733765	21.2	discard	weight tying (shared wte/lm_head)
