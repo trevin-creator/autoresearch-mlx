@@ -461,7 +461,7 @@ def main() -> None:
             ternary_threshold_min=args.ternary_threshold_min,
             ternary_threshold_max=args.ternary_threshold_max,
         )
-        metrics = train_once(cfg)
+        _, metrics = train_once(cfg)
 
         if args.ternary_search and args.run_verilator:
             if args.verilator_mode == "lint":

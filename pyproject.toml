@@ -16,6 +16,11 @@ dependencies = [
     "h5py>=3.0.0",
 ]
 
+[project.optional-dependencies]
+snn-ir = [
+    "snn-ir @ git+https://github.com/vlordier/snn-ir.git",
+]
+
 [tool.ruff]
 target-version = "py310"
 

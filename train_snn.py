@@ -181,7 +181,8 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         f.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
-def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
+def train_once(cfg: ExperimentConfig) -> tuple[dict[str, Any], Any]:
+    """Train an SNN model and return (metrics, model)."""
     t_start = time.time()
     mx.random.seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -308,7 +309,7 @@ def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
         "num_params_M": float(num_params / 1e6),
         "device": device_name,
     }
-    return result
+    return result, model
 
 
 def parse_args() -> argparse.Namespace:
@@ -368,6 +369,12 @@ def parse_args() -> argparse.Namespace:
         default=Path("experiments/snn_runs.jsonl"),
         help="Structured JSONL output path for run metadata and metrics.",
     )
+    parser.add_argument(
+        "--export-ir",
+        type=Path,
+        default=None,
+        help="Path to write NetworkIR JSON after training (enables hardware export).",
+    )
     return parser.parse_args()
 
 
@@ -391,7 +398,15 @@ def main() -> None:
         time_budget_s=args.time_budget_s,
     )
 
-    result = train_once(cfg)
+    result, model = train_once(cfg)
+
+    if args.export_ir is not None:
+        from snn_ir.export import export_ir
+
+        ir = export_ir(model, cfg, meta={"git_commit": get_git_commit_short()})
+        args.export_ir.parent.mkdir(parents=True, exist_ok=True)
+        args.export_ir.write_text(ir.model_dump_json(indent=2))
+        print(f"IR exported to {args.export_ir}")
 
     run_payload = {
         "schema_version": 1,
