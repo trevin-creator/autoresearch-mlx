@@ -9,3 +9,5 @@ ef3a2f4	1.823991	3.3	keep	halve batch to 2^14
 8d94b44	1.735237	3.1	keep	replace ReLU^2 with SiLU activation
 047fc1f	1.831872	3.1	discard	reduce weight decay from 0.2 to 0.05
 831a7c1	1.689895	3.0	keep	SwiGLU gated MLP
+2848bfc	1.697757	3.0	discard	cosine LR decay instead of linear warmdown
+04e44ec	1.640671	3.0	keep	lower matrix LR from 0.04 to 0.02
