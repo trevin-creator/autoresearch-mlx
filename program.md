@@ -158,6 +158,35 @@ Rules:
 
 ---
 
+## Vision Benchmark Track (required)
+
+In addition to language-model-style experiments, continuously search for and evaluate strong vision benchmarks relevant to spiking and event-driven modeling.
+
+Prioritize benchmark discovery for:
+
+* event-camera datasets and tasks
+* motion-heavy recognition/classification
+* low-latency temporal perception
+* energy/efficiency-oriented vision settings
+
+When real event-camera data is limited, include an emulation path:
+
+* use cheap high-FPS global-shutter cameras
+* convert frame streams into event-style representations (delta-threshold or equivalent)
+* evaluate spiking and spike-inspired models on the emulated event streams
+
+For each vision benchmark candidate, record:
+
+* task definition
+* dataset/source and access constraints
+* preprocessing/emulation pipeline
+* metric quality and relevance to MLX + Spyx goals
+* expected compute and memory footprint
+
+Reject benchmarks that are easy but not informative for temporal/event-driven behavior.
+
+---
+
 ## Experimentation
 
 Each run:
@@ -404,6 +433,7 @@ This is now:
 * Optuna-guided search
 * across dense + spike + hybrid models
 * optimized for MLX GPU via Spyx
+* expanded to include meaningful vision and event-vision benchmark coverage
 
 Key levers:
 
