@@ -8,11 +8,9 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
         files: ^(datagen/.*\.py|generate_stereo_events\.py)$
 
-  - repo: local
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
     hooks:
-      - id: ty
-        name: ty
-        entry: uvx ty@0.0.24 check datagen/
-        language: system
-        pass_filenames: false
-        always_run: true
+      - id: check-added-large-files
+        args: ['--maxkb=100000']
+        description: Prevent giant files (>100MB) from being committed
