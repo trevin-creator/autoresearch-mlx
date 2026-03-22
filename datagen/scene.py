@@ -9,6 +9,7 @@ Requires the ``genesis`` package (``pip install genesis-world``).
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -414,6 +415,21 @@ class GenesisStereoEventDataset:
         _, depth_gt = self._extract_rgb_depth(center_out)
         return depth_gt
 
+    def depth_to_disparity_gt(self, depth_left: np.ndarray) -> np.ndarray:
+        """Compute dense disparity GT (pixels) from left depth and stereo intrinsics."""
+        fx = (
+            0.5
+            * self.cam_cfg.width
+            / math.tan(math.radians(self.cam_cfg.fov_deg) / 2.0)
+        )
+        baseline = self.stereo_cfg.baseline_m
+        depth = np.asarray(depth_left, dtype=np.float32)
+
+        disparity = np.zeros_like(depth, dtype=np.float32)
+        valid = np.isfinite(depth) & (depth > 1e-6)
+        disparity[valid] = (fx * baseline) / depth[valid]
+        return disparity
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -436,8 +452,9 @@ class GenesisStereoEventDataset:
             t_us = int(round(t * 1e6))
 
             pose_info = self.update_camera_poses(t)
-            rgb_left, _depth_left, rgb_right, _depth_right = self.render_pair()
+            rgb_left, depth_left, rgb_right, depth_right = self.render_pair()
             depth_gt = self.render_depth_gt()
+            disparity_gt = self.depth_to_disparity_gt(depth_left)
 
             events_left = self.left_emu.step(rgb_left, t_us=t_us)
             events_right = self.right_emu.step(rgb_right, t_us=t_us)
@@ -448,9 +465,19 @@ class GenesisStereoEventDataset:
             )
 
             if step_idx % self.sim_cfg.export_every_n_depth == 0:
+                depth_left_path = self.writer.write_depth(step_idx, "left", depth_left)
+                depth_right_path = self.writer.write_depth(
+                    step_idx, "right", depth_right
+                )
                 depth_gt_path = self.writer.write_depth_gt(step_idx, depth_gt)
+                disparity_gt_path = self.writer.write_disparity_gt(
+                    step_idx, disparity_gt
+                )
             else:
+                depth_left_path = ""
+                depth_right_path = ""
                 depth_gt_path = ""
+                disparity_gt_path = ""
 
             if self.out_cfg.save_rgb_preview:
                 self.writer.write_rgb_preview(step_idx, "left", rgb_left)
@@ -476,7 +503,10 @@ class GenesisStereoEventDataset:
                 t_us=t_us,
                 events_left_path=left_events_path,
                 events_right_path=right_events_path,
+                depth_left_path=depth_left_path,
+                depth_right_path=depth_right_path,
                 depth_gt_path=depth_gt_path,
+                disparity_gt_path=disparity_gt_path,
             )
 
             if step_idx % 100 == 0:
