@@ -15,6 +15,9 @@ run_snn.log
 spyx/
 spyx_mlx/
 
+# Lock files (generated, not committed)
+uv.lock
+
 # Generated local experiment / smoke outputs
 _depth_*_smoke/
 _esim_*_smoke/
