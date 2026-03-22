@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import argparse
 
-from datagen.config import (
+from eventcam.config import (
     CameraConfig,
     EventConfig,
     OutputConfig,
     SimConfig,
     StereoConfig,
 )
-from datagen.scene import GenesisStereoEventDataset
-from datagen.sensor_models import available_sensor_profiles, get_sensor_profile
+from eventcam.scene import GenesisStereoEventDataset
+from eventcam.sensor_models import available_sensor_profiles, get_sensor_profile
 
 
 def _add_camera_args(p: argparse.ArgumentParser) -> None:
