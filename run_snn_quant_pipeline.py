@@ -1,4 +1,4 @@
-"""Run fixed-point -> ternary -> Verilator SNN search with Dagster-style staging."""
+"""Run quant search and full autoresearch hardware pipeline with Dagster."""
 
 from __future__ import annotations
 
@@ -12,9 +12,18 @@ import yaml
 
 from orchestration.snn_quant_dagster import (
     append_jsonl,
+    run_data_generation_stage,
+    run_fixed_reference_stage,
     run_fixed_stage,
+    run_fpga_synthesis_stage,
+    run_icarus_stage,
+    run_rtl_stage,
+    run_snn_ir_stage,
+    run_spyx_float_stage,
     run_ternary_stage,
+    run_verilator_integration_stage,
     run_verilator_stage,
+    snn_autoresearch_hw_pipeline,
     snn_quant_pipeline,
 )
 
@@ -32,8 +41,24 @@ def parse_args() -> argparse.Namespace:
         "--stage",
         type=str,
         default="full",
-        choices=["fixed", "ternary", "verilator", "full"],
-        help="Stage target. full/verilator runs fixed->ternary->verilator.",
+        choices=[
+            "fixed",
+            "ternary",
+            "verilator",
+            "data_generation",
+            "spyx_float",
+            "fixed_reference",
+            "snn_ir",
+            "rtl",
+            "icarus",
+            "verilator_integration",
+            "fpga_synthesis",
+            "full",
+        ],
+        help=(
+            "Stage target. full runs the complete flow: "
+            "dataset->spyx(float)->fixed_ref->ternary->snn_ir->rtl->icarus->verilator->fpga"
+        ),
     )
     p.add_argument(
         "--skip-prereqs",
@@ -91,15 +116,23 @@ def _mark_pipeline_event(
     append_jsonl(path, payload)
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915
     args = parse_args()
     params = select_profile_params(load_params(args.params), args.profile)
 
     fixed_cfg = dict(params.get("fixed_search", {}))
     ternary_cfg = dict(params.get("ternary_search", {}))
     verilator_cfg = dict(params.get("verilator_stage", {}))
+    data_cfg = dict(params.get("data_generation_stage", {}))
+    spyx_cfg = dict(params.get("spyx_float_stage", {}))
+    fixed_ref_cfg = dict(params.get("fixed_point_reference_stage", {}))
+    snn_ir_cfg = dict(params.get("snn_ir_stage", {}))
+    rtl_cfg = dict(params.get("rtl_stage", {}))
+    icarus_cfg = dict(params.get("icarus_stage", {}))
+    verilator_integration_cfg = dict(params.get("verilator_integration_stage", {}))
+    fpga_cfg = dict(params.get("fpga_synthesis_stage", {}))
 
-    run_target = "verilator" if args.stage == "full" else args.stage
+    run_target = "fpga_synthesis" if args.stage == "full" else args.stage
 
     _mark_pipeline_event(
         path=args.pipeline_log_jsonl,
@@ -114,6 +147,69 @@ def main() -> None:
 
     fixed_result: dict[str, Any] = {"passed": True}
     ternary_result: dict[str, Any] = {"passed": True}
+
+    quant_only_mode = not data_cfg
+
+    if run_target == "fpga_synthesis" and not args.skip_prereqs and args.use_dagster:
+        if quant_only_mode:
+            run_config = {
+                "ops": {
+                    "fixed_search_op": {"config": {"fixed": fixed_cfg}},
+                    "ternary_search_op": {"config": {"ternary": ternary_cfg}},
+                    "verilator_op": {"config": {"verilator": verilator_cfg}},
+                }
+            }
+            dagster_result = snn_quant_pipeline.execute_in_process(
+                run_config=run_config
+            )
+        else:
+            run_config = {
+                "ops": {
+                    "data_generation_op": {"config": {"data_generation": data_cfg}},
+                    "spyx_float_op": {"config": {"spyx_float": spyx_cfg}},
+                    "fixed_ref_op": {"config": {"fixed_ref": fixed_ref_cfg}},
+                    "ternary_hw_op": {"config": {"ternary": ternary_cfg}},
+                    "snn_ir_op": {"config": {"snn_ir": snn_ir_cfg}},
+                    "rtl_codegen_op": {"config": {"rtl": rtl_cfg}},
+                    "icarus_op": {"config": {"icarus": icarus_cfg}},
+                    "verilator_integration_op": {
+                        "config": {"verilator_integration": verilator_integration_cfg}
+                    },
+                    "fpga_synth_op": {"config": {"fpga_synth": fpga_cfg}},
+                }
+            }
+            dagster_result = snn_autoresearch_hw_pipeline.execute_in_process(
+                run_config=run_config
+            )
+
+        if not dagster_result.success:
+            _mark_pipeline_event(
+                path=args.pipeline_log_jsonl,
+                stage="dagster_full",
+                status="failed",
+                details={"reason": "Dagster pipeline failed"},
+            )
+            raise SystemExit(1)
+
+        _mark_pipeline_event(
+            path=args.pipeline_log_jsonl,
+            stage="dagster_full",
+            status="completed",
+            details={"params": str(args.params)},
+        )
+        print(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "stage": run_target,
+                    "mode": "dagster",
+                    "profile": args.profile,
+                    "pipeline_log": str(args.pipeline_log_jsonl),
+                },
+                indent=2,
+            )
+        )
+        return
 
     if run_target == "verilator" and not args.skip_prereqs and args.use_dagster:
         run_config = {
@@ -152,6 +248,52 @@ def main() -> None:
             )
         )
         return
+
+    if run_target == "data_generation":
+        result = run_data_generation_stage(data_cfg)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "spyx_float":
+        result = run_spyx_float_stage(spyx_cfg)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "fixed_reference":
+        result = run_fixed_reference_stage(fixed_ref_cfg)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "snn_ir":
+        result = run_snn_ir_stage(snn_ir_cfg)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "rtl":
+        result = run_rtl_stage(rtl_cfg)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "icarus":
+        rtl_result = run_rtl_stage(rtl_cfg)
+        if not rtl_result["passed"]:
+            raise SystemExit(1)
+        result = run_icarus_stage(icarus_cfg, rtl_result)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "verilator_integration":
+        rtl_result = run_rtl_stage(rtl_cfg)
+        if not rtl_result["passed"]:
+            raise SystemExit(1)
+        result = run_verilator_integration_stage(verilator_integration_cfg, rtl_result)
+        if not result["passed"]:
+            raise SystemExit(1)
+
+    if run_target == "fpga_synthesis" and args.skip_prereqs:
+        result = run_fpga_synthesis_stage(fpga_cfg)
+        if not result["passed"]:
+            raise SystemExit(1)
 
     if run_target in {"fixed", "ternary", "verilator"} and not args.skip_prereqs:
         fixed_result = run_fixed_stage(fixed_cfg)

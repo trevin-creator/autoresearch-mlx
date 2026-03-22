@@ -43,6 +43,55 @@ profiles:
       verilator_sim_width: 32
       verilator_sim_steps: 16
 
+    data_generation_stage:
+      command: python eventcam/generate_curriculum.py --params eventcam/params_curriculum.yaml
+      timeout_s: 14400
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
+    spyx_float_stage:
+      command: python train_snn.py --weight-mode float --time-budget-s 300 --log-jsonl experiments/hw_flow/spyx_float_runs.jsonl
+      timeout_s: 7200
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
+    fixed_point_reference_stage:
+      command: python train_snn.py --weight-mode fixed --fixed-point-bits 8 --fixed-point-frac-bits 4 --time-budget-s 300 --log-jsonl experiments/hw_flow/fixed_ref_runs.jsonl
+      timeout_s: 7200
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
+    snn_ir_stage:
+      command: python train_snn.py --weight-mode ternary --time-budget-s 180 --export-ir experiments/hw_flow/model_ir.json --log-jsonl experiments/hw_flow/ternary_ir_runs.jsonl
+      timeout_s: 7200
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
+    rtl_stage:
+      ir_json: experiments/hw_flow/model_ir.json
+      rtl_sv: experiments/hw_flow/generated_top.sv
+      tb_sv: experiments/hw_flow/tb_top.sv
+      tb_top: tb_top
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+
+    icarus_stage:
+      sim_out: experiments/hw_flow/icarus_sim.out
+      timeout_s: 600
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
+    verilator_integration_stage:
+      mode: lint
+      timeout_s: 600
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
+    fpga_synthesis_stage:
+      command: "python -c \"print('fpga synthesis stage placeholder: replace with yosys/nextpnr or vendor flow')\""
+      timeout_s: 600
+      stage_log_jsonl: experiments/hw_flow/stage_runs.jsonl
+      cwd: .
+
   smoke:
     pipeline:
       name: snn_quant_pipeline_smoke
@@ -86,3 +135,52 @@ profiles:
       verilator_max_width: 128
       verilator_sim_width: 32
       verilator_sim_steps: 4
+
+    data_generation_stage:
+      command: python eventcam/generate_curriculum.py --params eventcam/params_curriculum.yaml --duration 2 --backend cpu --out-dir ./experiments/smoke/datagen
+      timeout_s: 1800
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .
+
+    spyx_float_stage:
+      command: python train_snn.py --weight-mode float --time-budget-s 20 --log-jsonl experiments/smoke/spyx_float_runs.jsonl
+      timeout_s: 900
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .
+
+    fixed_point_reference_stage:
+      command: python train_snn.py --weight-mode fixed --fixed-point-bits 6 --fixed-point-frac-bits 3 --time-budget-s 20 --log-jsonl experiments/smoke/fixed_ref_runs.jsonl
+      timeout_s: 900
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .
+
+    snn_ir_stage:
+      command: python train_snn.py --weight-mode ternary --time-budget-s 20 --export-ir experiments/smoke/model_ir.json --log-jsonl experiments/smoke/ternary_ir_runs.jsonl
+      timeout_s: 900
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .
+
+    rtl_stage:
+      ir_json: experiments/smoke/model_ir.json
+      rtl_sv: experiments/smoke/generated_top.sv
+      tb_sv: experiments/smoke/tb_top.sv
+      tb_top: tb_top
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+
+    icarus_stage:
+      sim_out: experiments/smoke/icarus_sim.out
+      timeout_s: 240
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .
+
+    verilator_integration_stage:
+      mode: lint
+      timeout_s: 240
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .
+
+    fpga_synthesis_stage:
+      command: "python -c \"print('smoke fpga synthesis placeholder')\""
+      timeout_s: 120
+      stage_log_jsonl: experiments/smoke/hw_stage_runs.jsonl
+      cwd: .

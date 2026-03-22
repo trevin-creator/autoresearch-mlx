@@ -93,7 +93,7 @@ Each Verilator run writes trial context metadata to `experiments/verilator/trial
 ### Orchestrated pipeline (Dagster + DVC)
 
 ```bash
-# full staged pipeline: fixed -> ternary -> verilator (Dagster orchestration)
+# quant-focused pipeline: fixed -> ternary -> verilator (Dagster orchestration)
 uv run run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage full
 
 # quick CI sanity profile (tiny trials/time budgets)
@@ -102,10 +102,30 @@ uv run run_snn_quant_pipeline.py \
 	--profile smoke \
 	--stage full
 
+# full autoresearch hardware flow (Dagster):
+# data generation -> Spyx float (MLX) -> fixed-point reference -> ternary search
+# -> snn-ir export -> RTL -> Icarus functional simulation -> Verilator integration
+# -> FPGA synthesis
+uv run run_snn_quant_pipeline.py \
+	--params params_snn_quant.yaml \
+	--profile full \
+	--stage full
+
+# run just the explicit Icarus functional simulation stage
+uv run run_snn_quant_pipeline.py \
+	--params params_snn_quant.yaml \
+	--profile full \
+	--stage icarus \
+	--skip-prereqs
+
 # DVC staged execution (local cache tracking, no remote required)
 dvc repro snn_fixed_search
 dvc repro snn_ternary_search
 dvc repro snn_ternary_verilator
+
+# hardware-specific DVC stages
+dvc repro hw_icarus
+dvc repro hw_full_dag
 
 # One-shot DVC full pipeline
 dvc repro snn_quant_full_dag
@@ -121,6 +141,10 @@ Pipeline artifacts and structured logs are written under:
 - `experiments/snn_ternary_verilator_trials.jsonl`
 - `experiments/quant_pipeline/stage_runs.jsonl`
 - `experiments/quant_pipeline/pipeline_runs.jsonl`
+- `experiments/hw_flow/stage_runs.jsonl`
+- `experiments/hw_flow/generated_top.sv`
+- `experiments/hw_flow/tb_top.sv`
+- `experiments/hw_flow/icarus_sim.out`
 
 ## 3D Render
 
