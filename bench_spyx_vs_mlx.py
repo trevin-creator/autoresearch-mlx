@@ -35,8 +35,13 @@ class BenchResult:
     hidden: int
     steps: int
     backend: str
+    n_timed_runs: int
     mean_seconds: float
+    median_seconds: float
+    p10_seconds: float
+    p90_seconds: float
     std_seconds: float
+    coeff_var: float
     steps_per_second: float
     ms_per_step: float
 
@@ -45,10 +50,12 @@ class BenchResult:
 class ParityCheckResult:
     neuron: str
     ok: bool
+    trials: int
     atol: float
     rtol: float
     max_abs_out: float
     max_abs_state: float
+    worst_trial: int
     message: str
 
 
@@ -247,7 +254,14 @@ def _mlx_runner(neuron: str, hidden: int):
     return run
 
 
-def _time_jax(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
+def _time_jax(
+    neuron: str,
+    batch: int,
+    hidden: int,
+    steps: int,
+    repeats: int,
+    warmup_repeats: int,
+):
     rng = np.random.default_rng(0)
     xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
     xs = jnp.array(xs_np)
@@ -273,6 +287,11 @@ def _time_jax(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
         else:
             raise
 
+    for _ in range(warmup_repeats):
+        y, s = fn(params, xs, s0)
+        jax.block_until_ready(y)
+        jax.block_until_ready(s)
+
     times = []
     for _ in range(repeats):
         t0 = time.perf_counter()
@@ -283,7 +302,14 @@ def _time_jax(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
     return np.array(times, dtype=np.float64)
 
 
-def _time_mlx(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
+def _time_mlx(
+    neuron: str,
+    batch: int,
+    hidden: int,
+    steps: int,
+    repeats: int,
+    warmup_repeats: int,
+):
     rng = np.random.default_rng(0)
     xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
     xs = mx.array(xs_np)
@@ -292,6 +318,10 @@ def _time_mlx(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
 
     y, s = fn(xs, s0)
     mx.eval(y, s)
+
+    for _ in range(warmup_repeats):
+        y, s = fn(xs, s0)
+        mx.eval(y, s)
 
     times = []
     for _ in range(repeats):
@@ -370,44 +400,65 @@ def _parity_check_neuron(
     batch: int,
     hidden: int,
     steps: int,
+    trials: int,
+    base_seed: int,
     atol: float,
     rtol: float,
 ) -> ParityCheckResult:
-    rng = np.random.default_rng(123)
-    xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
-    s0_np = np.array(_state_for(neuron, batch, hidden, xp="jax"), dtype=np.float32)
+    worst_out = 0.0
+    worst_state = 0.0
+    worst_trial = -1
+    ok = True
+    msg = "pass"
 
-    w_rec_np = None
-    if neuron == "RLIF":
-        w_rec_np = rng.standard_normal((hidden, hidden), dtype=np.float32) * 0.2
+    for trial in range(trials):
+        rng = np.random.default_rng(base_seed + trial)
+        xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
+        s0_np = np.array(_state_for(neuron, batch, hidden, xp="jax"), dtype=np.float32)
 
-    try:
-        y_jax, s_jax = _forward_jax(neuron, xs_np, s0_np, w_rec_np=w_rec_np)
-        y_mlx, s_mlx = _forward_mlx(neuron, xs_np, s0_np, w_rec_np=w_rec_np)
-    except Exception as exc:  # noqa: BLE001
-        return ParityCheckResult(
-            neuron=neuron,
-            ok=False,
-            atol=atol,
-            rtol=rtol,
-            max_abs_out=float("inf"),
-            max_abs_state=float("inf"),
-            message=f"Execution error: {type(exc).__name__}: {exc}",
-        )
+        w_rec_np = None
+        if neuron == "RLIF":
+            w_rec_np = rng.standard_normal((hidden, hidden), dtype=np.float32) * 0.2
 
-    abs_out = np.max(np.abs(y_jax - y_mlx))
-    abs_state = np.max(np.abs(s_jax - s_mlx))
-    out_ok = np.allclose(y_jax, y_mlx, atol=atol, rtol=rtol)
-    state_ok = np.allclose(s_jax, s_mlx, atol=atol, rtol=rtol)
-    ok = bool(out_ok and state_ok)
-    msg = "pass" if ok else "mismatch"
+        try:
+            y_jax, s_jax = _forward_jax(neuron, xs_np, s0_np, w_rec_np=w_rec_np)
+            y_mlx, s_mlx = _forward_mlx(neuron, xs_np, s0_np, w_rec_np=w_rec_np)
+        except Exception as exc:  # noqa: BLE001
+            return ParityCheckResult(
+                neuron=neuron,
+                ok=False,
+                trials=trials,
+                atol=atol,
+                rtol=rtol,
+                max_abs_out=float("inf"),
+                max_abs_state=float("inf"),
+                worst_trial=trial,
+                message=f"Execution error: {type(exc).__name__}: {exc}",
+            )
+
+        abs_out = float(np.max(np.abs(y_jax - y_mlx)))
+        abs_state = float(np.max(np.abs(s_jax - s_mlx)))
+        if abs_out > worst_out or abs_state > worst_state:
+            worst_out = max(worst_out, abs_out)
+            worst_state = max(worst_state, abs_state)
+            worst_trial = trial
+
+        out_ok = np.allclose(y_jax, y_mlx, atol=atol, rtol=rtol)
+        state_ok = np.allclose(s_jax, s_mlx, atol=atol, rtol=rtol)
+        if not (out_ok and state_ok):
+            ok = False
+            msg = "mismatch"
+            break
+
     return ParityCheckResult(
         neuron=neuron,
         ok=ok,
+        trials=trials,
         atol=atol,
         rtol=rtol,
-        max_abs_out=float(abs_out),
-        max_abs_state=float(abs_state),
+        max_abs_out=worst_out,
+        max_abs_state=worst_state,
+        worst_trial=worst_trial,
         message=msg,
     )
 
@@ -422,7 +473,11 @@ def _summary(
     times: np.ndarray,
 ):
     mean_s = float(times.mean())
+    median_s = float(np.median(times))
+    p10_s = float(np.percentile(times, 10))
+    p90_s = float(np.percentile(times, 90))
     std_s = float(times.std())
+    cv = float(std_s / mean_s) if mean_s > 0 else 0.0
     return BenchResult(
         neuron=neuron,
         config=cfg_name,
@@ -430,8 +485,13 @@ def _summary(
         hidden=hidden,
         steps=steps,
         backend=backend,
+        n_timed_runs=int(times.size),
         mean_seconds=mean_s,
+        median_seconds=median_s,
+        p10_seconds=p10_s,
+        p90_seconds=p90_s,
         std_seconds=std_s,
+        coeff_var=cv,
         steps_per_second=float(steps / mean_s),
         ms_per_step=float(mean_s * 1000.0 / steps),
     )
@@ -464,6 +524,7 @@ def main():
         description="Benchmark spyx (JAX) vs spyx_mlx (MLX)"
     )
     parser.add_argument("--repeats", type=int, default=8)
+    parser.add_argument("--warmup-repeats", type=int, default=2)
     parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
     parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--skip-jax", action="store_true")
@@ -495,6 +556,8 @@ def main():
     parser.add_argument("--bench-parity-batch", type=int, default=8)
     parser.add_argument("--bench-parity-hidden", type=int, default=64)
     parser.add_argument("--bench-parity-steps", type=int, default=16)
+    parser.add_argument("--bench-parity-trials", type=int, default=3)
+    parser.add_argument("--bench-parity-seed", type=int, default=123)
     parser.add_argument("--bench-parity-atol", type=float, default=1e-5)
     parser.add_argument("--bench-parity-rtol", type=float, default=1e-5)
     args = parser.parse_args()
@@ -566,13 +629,16 @@ def main():
                 batch=args.bench_parity_batch,
                 hidden=args.bench_parity_hidden,
                 steps=args.bench_parity_steps,
+                trials=args.bench_parity_trials,
+                base_seed=args.bench_parity_seed,
                 atol=args.bench_parity_atol,
                 rtol=args.bench_parity_rtol,
             )
             parity_results.append(check)
             print(
                 f"parity {neuron}: {check.message} "
-                f"(max_abs_out={check.max_abs_out:.3e}, max_abs_state={check.max_abs_state:.3e})"
+                f"(trials={check.trials}, max_abs_out={check.max_abs_out:.3e}, "
+                f"max_abs_state={check.max_abs_state:.3e}, worst_trial={check.worst_trial})"
             )
             if not check.ok:
                 failures.append(
@@ -582,7 +648,8 @@ def main():
                         "config": "precheck",
                         "error": (
                             f"Parity mismatch at atol={check.atol}, rtol={check.rtol}; "
-                            f"max_abs_out={check.max_abs_out:.3e}, max_abs_state={check.max_abs_state:.3e}"
+                            f"max_abs_out={check.max_abs_out:.3e}, max_abs_state={check.max_abs_state:.3e}, "
+                            f"worst_trial={check.worst_trial}"
                         ),
                     }
                 )
@@ -596,7 +663,14 @@ def main():
         for cfg_name, batch, hidden, steps in configs:
             try:
                 if not effective_skip_jax:
-                    jax_times = _time_jax(neuron, batch, hidden, steps, args.repeats)
+                    jax_times = _time_jax(
+                        neuron,
+                        batch,
+                        hidden,
+                        steps,
+                        args.repeats,
+                        args.warmup_repeats,
+                    )
                     rows.append(
                         _summary(
                             neuron,
@@ -620,7 +694,14 @@ def main():
 
             try:
                 if not args.skip_mlx:
-                    mlx_times = _time_mlx(neuron, batch, hidden, steps, args.repeats)
+                    mlx_times = _time_mlx(
+                        neuron,
+                        batch,
+                        hidden,
+                        steps,
+                        args.repeats,
+                        args.warmup_repeats,
+                    )
                     rows.append(
                         _summary(
                             neuron,
@@ -647,6 +728,7 @@ def main():
     payload = {
         "run_config": {
             "repeats": args.repeats,
+            "warmup_repeats": args.warmup_repeats,
             "mlx_device": args.mlx_device,
             "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
@@ -656,6 +738,8 @@ def main():
             "bench_parity_batch": args.bench_parity_batch,
             "bench_parity_hidden": args.bench_parity_hidden,
             "bench_parity_steps": args.bench_parity_steps,
+            "bench_parity_trials": args.bench_parity_trials,
+            "bench_parity_seed": args.bench_parity_seed,
             "bench_parity_atol": args.bench_parity_atol,
             "bench_parity_rtol": args.bench_parity_rtol,
             "jax_backend": jax.default_backend(),
