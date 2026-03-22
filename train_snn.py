@@ -208,7 +208,10 @@ def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
 
     def loss_fn(local_model: nn.Module, x_seq: mx.array, targets: mx.array) -> mx.array:
         traces = local_model(x_seq)
-        return fn.integral_crossentropy(smoothing=cfg.label_smoothing)(traces, targets)
+        return fn.integral_crossentropy(
+            smoothing=cfg.label_smoothing,
+            time_axis=0,
+        )(traces, targets)
 
     loss_and_grad = nn.value_and_grad(model, loss_fn)
 
@@ -395,7 +398,7 @@ def main() -> None:
         "timestamp_utc": datetime.now(UTC).isoformat(),
         "git_commit": get_git_commit_short(),
         "python_seed": cfg.seed,
-        "mlx_version": mx.__version__,
+        "mlx_version": str(getattr(mx, "__version__", "unknown")),
         "config": dataclasses.asdict(cfg),
         "metrics": result,
     }
