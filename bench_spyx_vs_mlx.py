@@ -453,17 +453,39 @@ def _time_mlx_train_step(
 
     value_and_grad = mlxn.value_and_grad(cell, loss_fn)
 
+    def step_fn(x_in, s_in):
+        return value_and_grad(cell, x_in, s_in)
+
+    if hasattr(mx, "compile"):
+        step_fn = mx.compile(step_fn)
+
     for _ in range(warmup_repeats):
-        loss, grads = value_and_grad(cell, xs, s0)
+        loss, grads = step_fn(xs, s0)
         mx.eval(loss, grads)
 
     times = []
     for _ in range(repeats):
         t0 = time.perf_counter()
-        loss, grads = value_and_grad(cell, xs, s0)
+        loss, grads = step_fn(xs, s0)
         mx.eval(loss, grads)
         times.append(time.perf_counter() - t0)
     return np.array(times, dtype=np.float64)
+
+
+def _configs_for_profile(profile: str):
+    if profile == "latency":
+        return [
+            ("small", 32, 128, 128),
+            ("medium", 64, 256, 128),
+            ("large", 96, 384, 128),
+        ]
+    if profile == "throughput":
+        return [
+            ("throughput-small", 96, 512, 192),
+            ("throughput-medium", 128, 768, 192),
+            ("throughput-large", 160, 1024, 192),
+        ]
+    raise ValueError(f"Unsupported benchmark profile: {profile}")
 
 
 def _replace_param_named(tree, name: str, value):
@@ -665,6 +687,12 @@ def main():
         default="forward",
         help="Benchmark forward pass only, or full training step (forward+backward).",
     )
+    parser.add_argument(
+        "--profile",
+        choices=["latency", "throughput"],
+        default="latency",
+        help="Benchmark shape profile: latency-oriented or throughput-oriented.",
+    )
     parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
     parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--skip-jax", action="store_true")
@@ -763,11 +791,7 @@ def main():
         args.json.write_text(json.dumps(payload, indent=2))
         raise SystemExit(2)
 
-    configs = [
-        ("small", 32, 128, 128),
-        ("medium", 64, 256, 128),
-        ("large", 96, 384, 128),
-    ]
+    configs = _configs_for_profile(args.profile)
     neurons = ["IF", "LIF", "ALIF", "CuBaLIF", "RLIF"]
     jax_backend_name = f"spyx-jax-{jax.default_backend().lower()}"
     mlx_backend_name = (
@@ -922,6 +946,7 @@ def main():
             "repeats": args.repeats,
             "warmup_repeats": args.warmup_repeats,
             "benchmark_kind": args.benchmark_kind,
+            "profile": args.profile,
             "mlx_device": args.mlx_device,
             "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
@@ -957,6 +982,24 @@ def main():
     noisy_rows = [asdict(r) for r in rows if r.coeff_var > args.max_allowed_cv]
     payload["aggregate"] = aggregate
     payload["noisy_rows"] = noisy_rows
+
+    geomean = aggregate["geomean_speedup"]
+    win_rate = aggregate["win_rate"]
+    mlx_faster = bool(
+        aggregate["count"] > 0
+        and geomean is not None
+        and win_rate is not None
+        and geomean > 1.0
+        and win_rate > 0.5
+    )
+    payload["verdict"] = {
+        "profile": args.profile,
+        "benchmark_kind": args.benchmark_kind,
+        "mlx_faster": mlx_faster,
+        "geomean_speedup": geomean,
+        "win_rate": win_rate,
+    }
+
     args.json.write_text(json.dumps(payload, indent=2))
 
     summary_unit = "ms/train-step" if args.benchmark_kind == "train-step" else "ms/step"
@@ -1013,6 +1056,12 @@ def main():
         )
     if noisy_rows:
         print(f"Noisy timed rows (cv > {args.max_allowed_cv:.2f}): {len(noisy_rows)}")
+
+    print("\nVerdict:")
+    print(
+        f"profile={args.profile} kind={args.benchmark_kind} "
+        f"mlx_faster={'YES' if mlx_faster else 'NO'}"
+    )
 
     print(f"\nWrote: {args.json}")
 
