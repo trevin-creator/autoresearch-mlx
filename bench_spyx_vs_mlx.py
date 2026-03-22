@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import sys
 import time
@@ -16,18 +17,13 @@ if str(ROOT) not in sys.path:
 if str(SPYX_SRC) not in sys.path:
     sys.path.insert(0, str(SPYX_SRC))
 
-import haiku as hk
-import jax
-import jax.numpy as jnp
-import mlx.core as mx
-
-import spyx.nn as spyx_nn
-import spyx.axn as spyx_axn
-from spyx_mlx.nn import ALIF as MlxALIF
-from spyx_mlx.nn import CuBaLIF as MlxCuBaLIF
-from spyx_mlx.nn import IF as MlxIF
-from spyx_mlx.nn import LIF as MlxLIF
-from spyx_mlx.nn import RLIF as MlxRLIF
+import haiku as hk  # noqa: E402
+import jax  # noqa: E402
+import jax.numpy as jnp  # noqa: E402
+import mlx.core as mx  # noqa: E402
+import spyx.axn as spyx_axn  # noqa: E402
+import spyx.nn as spyx_nn  # noqa: E402
+import spyx_mlx.nn as mlx_nn  # noqa: E402
 
 
 @dataclass
@@ -42,6 +38,49 @@ class BenchResult:
     std_seconds: float
     steps_per_second: float
     ms_per_step: float
+
+
+def _parse_semver(version: str) -> tuple[int, int, int]:
+    core = version.split("+", 1)[0]
+    parts = core.split(".")
+    out = []
+    for part in parts[:3]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    while len(out) < 3:
+        out.append(0)
+    return out[0], out[1], out[2]
+
+
+def _jax_stack_info() -> dict[str, str | None]:
+    info: dict[str, str | None] = {
+        "jax": None,
+        "jaxlib": None,
+        "jax-metal": None,
+    }
+    for pkg in info:
+        try:
+            info[pkg] = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            info[pkg] = None
+    return info
+
+
+def _metal_compat_warning(stack: dict[str, str | None]) -> str | None:
+    jax_v = stack.get("jax")
+    metal_v = stack.get("jax-metal")
+    if jax.default_backend().lower() != "metal" or not jax_v or not metal_v:
+        return None
+
+    # Latest jax-metal stacks can fail with `default_memory_space` on some macOS setups.
+    if _parse_semver(jax_v) >= (0, 5, 0):
+        return (
+            "Detected JAX Metal with jax>=0.5; this stack can raise "
+            "`default_memory_space` during array creation/JIT on macOS. "
+            "Recommended pinned benchmark stack: "
+            "jax==0.4.26, jaxlib==0.4.26, jax-metal==0.1.0, dm-haiku==0.0.12, optax==0.2.2."
+        )
+    return None
 
 
 def _state_for(neuron: str, batch: int, hidden: int, xp: str):
@@ -167,15 +206,19 @@ def _spyx_transformed(neuron: str, hidden: int):
 def _mlx_runner(neuron: str, hidden: int):
     hidden_shape = (hidden,)
     if neuron == "IF":
-        cell = MlxIF(hidden_shape=hidden_shape, threshold=1.0)
+        cell = mlx_nn.IF(hidden_shape=hidden_shape, threshold=1.0)
     elif neuron == "LIF":
-        cell = MlxLIF(hidden_shape=hidden_shape, beta_init=0.9, threshold=1.0)
+        cell = mlx_nn.LIF(hidden_shape=hidden_shape, beta_init=0.9, threshold=1.0)
     elif neuron == "ALIF":
-        cell = MlxALIF(hidden_shape=hidden_shape, beta_init=0.9, gamma_init=0.9, threshold=1.0)
+        cell = mlx_nn.ALIF(
+            hidden_shape=hidden_shape, beta_init=0.9, gamma_init=0.9, threshold=1.0
+        )
     elif neuron == "CuBaLIF":
-        cell = MlxCuBaLIF(hidden_shape=hidden_shape, alpha_init=0.8, beta_init=0.9, threshold=1.0)
+        cell = mlx_nn.CuBaLIF(
+            hidden_shape=hidden_shape, alpha_init=0.8, beta_init=0.9, threshold=1.0
+        )
     elif neuron == "RLIF":
-        cell = MlxRLIF(hidden_shape=hidden_shape, beta_init=0.9, threshold=1.0)
+        cell = mlx_nn.RLIF(hidden_shape=hidden_shape, beta_init=0.9, threshold=1.0)
     else:
         raise ValueError(f"Unsupported neuron: {neuron}")
 
@@ -207,7 +250,7 @@ def _time_jax(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
         y, s = fn(params, xs, s0)
         jax.block_until_ready(y)
         jax.block_until_ready(s)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         err = str(exc)
         if jax.default_backend().lower() == "metal" and "default_memory_space" in err:
             use_jit = False
@@ -247,7 +290,15 @@ def _time_mlx(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
     return np.array(times, dtype=np.float64)
 
 
-def _summary(neuron: str, cfg_name: str, batch: int, hidden: int, steps: int, backend: str, times: np.ndarray):
+def _summary(
+    neuron: str,
+    cfg_name: str,
+    batch: int,
+    hidden: int,
+    steps: int,
+    backend: str,
+    times: np.ndarray,
+):
     mean_s = float(times.mean())
     std_s = float(times.std())
     return BenchResult(
@@ -265,12 +316,20 @@ def _summary(neuron: str, cfg_name: str, batch: int, hidden: int, steps: int, ba
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark spyx (JAX) vs spyx_mlx (MLX)")
+    parser = argparse.ArgumentParser(
+        description="Benchmark spyx (JAX) vs spyx_mlx (MLX)"
+    )
     parser.add_argument("--repeats", type=int, default=8)
     parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
     parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--skip-jax", action="store_true")
     parser.add_argument("--skip-mlx", action="store_true")
+    parser.add_argument(
+        "--auto-skip-incompatible-jax-metal",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If JAX Metal stack is likely incompatible, skip JAX timing and continue with MLX.",
+    )
     args = parser.parse_args()
 
     if args.mlx_device == "cpu":
@@ -285,7 +344,18 @@ def main():
     ]
     neurons = ["IF", "LIF", "ALIF", "CuBaLIF", "RLIF"]
     jax_backend_name = f"spyx-jax-{jax.default_backend().lower()}"
-    mlx_backend_name = "spyx-mlx-gpu" if "gpu" in str(mx.default_device()).lower() else "spyx-mlx-cpu"
+    mlx_backend_name = (
+        "spyx-mlx-gpu" if "gpu" in str(mx.default_device()).lower() else "spyx-mlx-cpu"
+    )
+
+    jax_stack = _jax_stack_info()
+    compat_warning = _metal_compat_warning(jax_stack)
+    effective_skip_jax = args.skip_jax
+    if compat_warning:
+        print(f"Compatibility warning: {compat_warning}")
+        if args.auto_skip_incompatible_jax_metal and not args.skip_jax:
+            effective_skip_jax = True
+            print("Auto-skip enabled: skipping JAX timings for this run.")
 
     print(f"JAX backend: {jax.default_backend()}")
     print(f"MLX default device: {mx.default_device()}")
@@ -295,28 +365,52 @@ def main():
     for neuron in neurons:
         for cfg_name, batch, hidden, steps in configs:
             try:
-                if not args.skip_jax:
+                if not effective_skip_jax:
                     jax_times = _time_jax(neuron, batch, hidden, steps, args.repeats)
-                    rows.append(_summary(neuron, cfg_name, batch, hidden, steps, jax_backend_name, jax_times))
+                    rows.append(
+                        _summary(
+                            neuron,
+                            cfg_name,
+                            batch,
+                            hidden,
+                            steps,
+                            jax_backend_name,
+                            jax_times,
+                        )
+                    )
             except Exception as exc:  # noqa: BLE001
-                failures.append({
-                    "backend": jax_backend_name,
-                    "neuron": neuron,
-                    "config": cfg_name,
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+                failures.append(
+                    {
+                        "backend": jax_backend_name,
+                        "neuron": neuron,
+                        "config": cfg_name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
 
             try:
                 if not args.skip_mlx:
                     mlx_times = _time_mlx(neuron, batch, hidden, steps, args.repeats)
-                    rows.append(_summary(neuron, cfg_name, batch, hidden, steps, mlx_backend_name, mlx_times))
+                    rows.append(
+                        _summary(
+                            neuron,
+                            cfg_name,
+                            batch,
+                            hidden,
+                            steps,
+                            mlx_backend_name,
+                            mlx_times,
+                        )
+                    )
             except Exception as exc:  # noqa: BLE001
-                failures.append({
-                    "backend": mlx_backend_name,
-                    "neuron": neuron,
-                    "config": cfg_name,
-                    "error": f"{type(exc).__name__}: {exc}",
-                })
+                failures.append(
+                    {
+                        "backend": mlx_backend_name,
+                        "neuron": neuron,
+                        "config": cfg_name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
 
             print(f"done: {neuron} {cfg_name}")
 
@@ -324,10 +418,12 @@ def main():
         "run_config": {
             "repeats": args.repeats,
             "mlx_device": args.mlx_device,
-            "skip_jax": args.skip_jax,
+            "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
             "jax_backend": jax.default_backend(),
             "mlx_default_device": str(mx.default_device()),
+            "jax_stack": jax_stack,
+            "compat_warning": compat_warning,
         },
         "results": [asdict(r) for r in rows],
         "failures": failures,
@@ -335,21 +431,45 @@ def main():
     args.json.write_text(json.dumps(payload, indent=2))
 
     print("\nSummary (ms/step, lower is better):")
-    print(f"neuron\tconfig\t{jax_backend_name}\t{mlx_backend_name}\tspeedup(mlx_vs_jax)")
+    print(
+        f"neuron\tconfig\t{jax_backend_name}\t{mlx_backend_name}\tspeedup(mlx_vs_jax)"
+    )
     for neuron in neurons:
         for cfg_name, batch, hidden, steps in configs:
-            j = next((r for r in rows if r.neuron == neuron and r.config == cfg_name and r.backend == jax_backend_name), None)
-            m = next((r for r in rows if r.neuron == neuron and r.config == cfg_name and r.backend == mlx_backend_name), None)
+            j = next(
+                (
+                    r
+                    for r in rows
+                    if r.neuron == neuron
+                    and r.config == cfg_name
+                    and r.backend == jax_backend_name
+                ),
+                None,
+            )
+            m = next(
+                (
+                    r
+                    for r in rows
+                    if r.neuron == neuron
+                    and r.config == cfg_name
+                    and r.backend == mlx_backend_name
+                ),
+                None,
+            )
+            j_ms = f"{j.ms_per_step:.4f}" if j is not None else "NA"
+            m_ms = f"{m.ms_per_step:.4f}" if m is not None else "NA"
             if j is None or m is None:
-                print(f"{neuron}\t{cfg_name}\tNA\tNA\tNA")
+                print(f"{neuron}\t{cfg_name}\t{j_ms}\t{m_ms}\tNA")
                 continue
             speedup = j.ms_per_step / m.ms_per_step
-            print(f"{neuron}\t{cfg_name}\t{j.ms_per_step:.4f}\t{m.ms_per_step:.4f}\t{speedup:.2f}x")
+            print(f"{neuron}\t{cfg_name}\t{j_ms}\t{m_ms}\t{speedup:.2f}x")
 
     if failures:
         print("\nFailures:")
         for item in failures:
-            print(f"{item['backend']} {item['neuron']} {item['config']}: {item['error']}")
+            print(
+                f"{item['backend']} {item['neuron']} {item['config']}: {item['error']}"
+            )
 
     print(f"\nWrote: {args.json}")
 
