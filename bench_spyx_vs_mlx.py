@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import math
 import importlib.metadata
 import json
+import math
 import subprocess
 import sys
 import time
@@ -25,6 +25,7 @@ import jax.numpy as jnp  # noqa: E402
 import mlx.core as mx  # noqa: E402
 import spyx.axn as spyx_axn  # noqa: E402
 import spyx.nn as spyx_nn  # noqa: E402
+
 import spyx_mlx.nn as mlx_nn  # noqa: E402
 
 
@@ -1121,7 +1122,9 @@ def main():
     exit_code = 0
 
     for profile in profiles:
-        profile_json = _profile_json_path(args.json, profile) if args.competition else args.json
+        profile_json = (
+            _profile_json_path(args.json, profile) if args.competition else args.json
+        )
         payload, profile_exit = _run_single_profile(
             args=args,
             profile=profile,
@@ -1138,7 +1141,8 @@ def main():
 
     if args.competition:
         verdicts = {
-            profile: data.get("verdict", {}) for profile, data in per_profile_payload.items()
+            profile: data.get("verdict", {})
+            for profile, data in per_profile_payload.items()
         }
         both_profiles_pass = all(
             bool(v.get("mlx_faster", False)) for v in verdicts.values()
@@ -1149,7 +1153,9 @@ def main():
         }
         best_profile = max(
             geomeans,
-            key=lambda p: geomeans[p] if isinstance(geomeans[p], (float, int)) else float("-inf"),
+            key=lambda p: (
+                geomeans[p] if isinstance(geomeans[p], (float, int)) else float("-inf")
+            ),
         )
         competition_payload = {
             "run_config": {
