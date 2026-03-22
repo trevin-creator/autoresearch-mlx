@@ -159,9 +159,13 @@ def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
     model = ShdSnn(N_CHANNELS, cfg.n_hidden, cfg.n_layers, N_CLASSES)
     mx.eval(model.parameters())
     num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
-    print(f"Parameters: {num_params / 1e6:.2f}M | hidden: {cfg.n_hidden} x {cfg.n_layers}")
+    print(
+        f"Parameters: {num_params / 1e6:.2f}M | hidden: {cfg.n_hidden} x {cfg.n_layers}"
+    )
 
-    optimizer = optim.AdamW(learning_rate=cfg.learning_rate, weight_decay=cfg.weight_decay)
+    optimizer = optim.AdamW(
+        learning_rate=cfg.learning_rate, weight_decay=cfg.weight_decay
+    )
 
     def loss_fn(local_model: nn.Module, x_seq: mx.array, targets: mx.array) -> mx.array:
         traces = local_model(x_seq)
@@ -209,7 +213,9 @@ def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
 
             if len(step_dt_samples) == 10:
                 avg_dt = sum(step_dt_samples) / len(step_dt_samples)
-                estimated_total_steps = max(1, int(cfg.time_budget_s / max(avg_dt, 1e-6)))
+                estimated_total_steps = max(
+                    1, int(cfg.time_budget_s / max(avg_dt, 1e-6))
+                )
 
             loss_f = float(loss.item())
             if not math.isfinite(loss_f):
@@ -269,13 +275,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-layers", type=int, default=ExperimentConfig.n_layers)
     parser.add_argument("--t-steps", type=int, default=ExperimentConfig.t_steps)
     parser.add_argument("--batch-size", type=int, default=ExperimentConfig.batch_size)
-    parser.add_argument("--learning-rate", type=float, default=ExperimentConfig.learning_rate)
-    parser.add_argument("--weight-decay", type=float, default=ExperimentConfig.weight_decay)
+    parser.add_argument(
+        "--learning-rate", type=float, default=ExperimentConfig.learning_rate
+    )
+    parser.add_argument(
+        "--weight-decay", type=float, default=ExperimentConfig.weight_decay
+    )
     parser.add_argument(
         "--label-smoothing", type=float, default=ExperimentConfig.label_smoothing
     )
-    parser.add_argument("--warmup-ratio", type=float, default=ExperimentConfig.warmup_ratio)
-    parser.add_argument("--final-lr-frac", type=float, default=ExperimentConfig.final_lr_frac)
+    parser.add_argument(
+        "--warmup-ratio", type=float, default=ExperimentConfig.warmup_ratio
+    )
+    parser.add_argument(
+        "--final-lr-frac", type=float, default=ExperimentConfig.final_lr_frac
+    )
     parser.add_argument("--seed", type=int, default=ExperimentConfig.seed)
     parser.add_argument(
         "--time-budget-s", type=float, default=ExperimentConfig.time_budget_s

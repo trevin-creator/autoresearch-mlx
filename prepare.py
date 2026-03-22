@@ -72,7 +72,7 @@ def download_single_shard(index):
             os.rename(temp_path, filepath)
             print(f"  Downloaded {filename}")
             return True
-        except (requests.RequestException, IOError) as exc:
+        except (OSError, requests.RequestException) as exc:
             print(f"  Attempt {attempt}/{max_attempts} failed for {filename}: {exc}")
             for path in [filepath + ".tmp", filepath]:
                 if os.path.exists(path):
@@ -94,7 +94,9 @@ def download_data(num_shards, download_workers=8):
         ids.append(VAL_SHARD)
 
     existing = sum(
-        1 for index in ids if os.path.exists(os.path.join(DATA_DIR, f"shard_{index:05d}.parquet"))
+        1
+        for index in ids
+        if os.path.exists(os.path.join(DATA_DIR, f"shard_{index:05d}.parquet"))
     )
     if existing == len(ids):
         print(f"Data: all {len(ids)} shards already downloaded at {DATA_DIR}")
@@ -113,13 +115,19 @@ def download_data(num_shards, download_workers=8):
 
 def list_parquet_files():
     """Return sorted list of parquet file paths in the data directory."""
-    files = sorted(name for name in os.listdir(DATA_DIR) if name.endswith(".parquet") and not name.endswith(".tmp"))
+    files = sorted(
+        name
+        for name in os.listdir(DATA_DIR)
+        if name.endswith(".parquet") and not name.endswith(".tmp")
+    )
     return [os.path.join(DATA_DIR, name) for name in files]
 
 
 def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
     """Yield documents from training split (all shards except pinned val shard)."""
-    parquet_paths = [path for path in list_parquet_files() if not path.endswith(VAL_FILENAME)]
+    parquet_paths = [
+        path for path in list_parquet_files() if not path.endswith(VAL_FILENAME)
+    ]
     nchars = 0
     for filepath in parquet_paths:
         parquet_file = pq.ParquetFile(filepath)
@@ -146,7 +154,9 @@ def train_tokenizer():
 
     parquet_files = list_parquet_files()
     if len(parquet_files) < 2:
-        print("Tokenizer: need at least 2 data shards (1 train + 1 val). Download more data first.")
+        print(
+            "Tokenizer: need at least 2 data shards (1 train + 1 val). Download more data first."
+        )
         sys.exit(1)
 
     print("Tokenizer: training BPE tokenizer...")
@@ -154,10 +164,14 @@ def train_tokenizer():
 
     tokenizer = rustbpe.Tokenizer()
     vocab_size_no_special = VOCAB_SIZE - len(SPECIAL_TOKENS)
-    tokenizer.train_from_iterator(text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN)
+    tokenizer.train_from_iterator(
+        text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN
+    )
 
     pattern = tokenizer.get_pattern()
-    mergeable_ranks = {bytes(key): value for key, value in tokenizer.get_mergeable_ranks()}
+    mergeable_ranks = {
+        bytes(key): value for key, value in tokenizer.get_mergeable_ranks()
+    }
     tokens_offset = len(mergeable_ranks)
     special_tokens = {name: tokens_offset + i for i, name in enumerate(SPECIAL_TOKENS)}
     enc = tiktoken.Encoding(
@@ -214,7 +228,11 @@ class Tokenizer:
 
     def encode(self, text, prepend=None, num_threads=8):
         if prepend is not None:
-            prepend_id = prepend if isinstance(prepend, int) else self.enc.encode_single_token(prepend)
+            prepend_id = (
+                prepend
+                if isinstance(prepend, int)
+                else self.enc.encode_single_token(prepend)
+            )
         if isinstance(text, str):
             ids = self.enc.encode_ordinary(text)
             if prepend is not None:
@@ -235,7 +253,9 @@ class Tokenizer:
 def get_token_bytes():
     path = os.path.join(TOKENIZER_DIR, "token_bytes.npy")
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Missing token_bytes lookup at {path}. Run prepare.py first.")
+        raise FileNotFoundError(
+            f"Missing token_bytes lookup at {path}. Run prepare.py first."
+        )
     token_bytes = np.load(path)
     return mx.array(token_bytes, dtype=mx.int32)
 
@@ -257,7 +277,7 @@ def _document_batches(split, tokenizer_batch_size=128):
                 row_group = parquet_file.read_row_group(rg_idx)
                 batch = row_group.column("text").to_pylist()
                 for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i:i + tokenizer_batch_size], epoch
+                    yield batch[i : i + tokenizer_batch_size], epoch
         epoch += 1
 
 
@@ -304,7 +324,9 @@ def make_dataloader(tokenizer, batch_size, seq_len, split, buffer_size=1000):
                     row.extend(doc)
                     pos += len(doc)
                 else:
-                    shortest_idx = min(range(len(doc_buffer)), key=lambda index: len(doc_buffer[index]))
+                    shortest_idx = min(
+                        range(len(doc_buffer)), key=lambda index: len(doc_buffer[index])
+                    )
                     doc = doc_buffer.pop(shortest_idx)
                     row.extend(doc[:remaining])
                     pos += remaining
@@ -346,14 +368,21 @@ def evaluate_bpb(model, tokenizer, batch_size):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare data and tokenizer for autoresearch")
+    parser = argparse.ArgumentParser(
+        description="Prepare data and tokenizer for autoresearch"
+    )
     parser.add_argument(
         "--num-shards",
         type=int,
         default=10,
         help="Number of training shards to download (-1 = all). Val shard is always pinned.",
     )
-    parser.add_argument("--download-workers", type=int, default=8, help="Number of parallel download workers")
+    parser.add_argument(
+        "--download-workers",
+        type=int,
+        default=8,
+        help="Number of parallel download workers",
+    )
     args = parser.parse_args()
 
     num_shards = MAX_SHARD if args.num_shards == -1 else args.num_shards

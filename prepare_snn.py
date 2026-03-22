@@ -17,15 +17,12 @@ We bin spikes into T discrete time steps and return dense binary tensors.
 """
 
 import gzip
-import hashlib
 import os
 import shutil
-import time
 from pathlib import Path
 
 import h5py
 import mlx.core as mx
-import mlx.nn as nn
 import numpy as np
 import requests
 
@@ -34,11 +31,11 @@ import requests
 # ---------------------------------------------------------------------------
 
 CACHE_DIR = Path(os.path.expanduser("~/.cache/autoresearch-snn"))
-N_CHANNELS = 700          # SHD input neurons
-N_CLASSES  = 20           # SHD classes (0-19 digits in German)
-TIME_BUDGET = 300         # seconds of training per experiment
-T_STEPS = 128             # time bins per sample (tunable in train_snn.py)
-MAX_DURATION = 1.0        # seconds — all SHD samples are <= 1 second
+N_CHANNELS = 700  # SHD input neurons
+N_CLASSES = 20  # SHD classes (0-19 digits in German)
+TIME_BUDGET = 300  # seconds of training per experiment
+T_STEPS = 128  # time bins per sample (tunable in train_snn.py)
+MAX_DURATION = 1.0  # seconds — all SHD samples are <= 1 second
 
 # Evaluation uses the full test set
 EVAL_BATCH_SIZE = 128
@@ -49,7 +46,7 @@ EVAL_BATCH_SIZE = 128
 
 SHD_FILES = {
     "shd_train.h5": "https://compneuro.net/datasets/shd_train.h5.gz",
-    "shd_test.h5":  "https://compneuro.net/datasets/shd_test.h5.gz",
+    "shd_test.h5": "https://compneuro.net/datasets/shd_test.h5.gz",
 }
 
 
@@ -91,7 +88,10 @@ def ensure_data():
 # Spike binning
 # ---------------------------------------------------------------------------
 
-def bin_spikes(h5_file: h5py.File, n_steps: int, max_dur: float = MAX_DURATION) -> tuple:
+
+def bin_spikes(
+    h5_file: h5py.File, n_steps: int, max_dur: float = MAX_DURATION
+) -> tuple:
     """
     Convert event-based SHD spikes to dense (N, T, C) binary tensors.
 
@@ -106,7 +106,7 @@ def bin_spikes(h5_file: h5py.File, n_steps: int, max_dur: float = MAX_DURATION) 
     """
     times_grp = h5_file["spikes"]["times"]
     units_grp = h5_file["spikes"]["units"]
-    labels    = np.array(h5_file["labels"], dtype=np.int64)
+    labels = np.array(h5_file["labels"], dtype=np.int64)
     N = len(labels)
     X = np.zeros((N, n_steps, N_CHANNELS), dtype=np.uint8)
 
@@ -127,6 +127,7 @@ def bin_spikes(h5_file: h5py.File, n_steps: int, max_dur: float = MAX_DURATION) 
 # Dataset wrapper
 # ---------------------------------------------------------------------------
 
+
 class SHDDataset:
     """Holds pre-binned SHD data as numpy arrays ready for MLX batch iteration."""
 
@@ -145,7 +146,7 @@ class SHDDataset:
         for start in range(0, self.N, batch_size):
             end = min(start + batch_size, self.N)
             batch_idx = idx[start:end]
-            x_np = self.X[batch_idx].astype(np.float32)   # (B, T, C)
+            x_np = self.X[batch_idx].astype(np.float32)  # (B, T, C)
             y_np = self.y[batch_idx]
             yield mx.array(x_np), mx.array(y_np)
 
@@ -162,7 +163,7 @@ def load_datasets(n_steps: int = T_STEPS) -> tuple:
     if cache_file.exists():
         data = np.load(cache_file)
         train_ds = SHDDataset(data["X_train"], data["y_train"])
-        test_ds  = SHDDataset(data["X_test"],  data["y_test"])
+        test_ds = SHDDataset(data["X_test"], data["y_test"])
         return train_ds, test_ds
 
     print(f"Binning SHD into {n_steps} time steps ...")
@@ -171,8 +172,9 @@ def load_datasets(n_steps: int = T_STEPS) -> tuple:
     with h5py.File(test_h5_path, "r") as f:
         X_test, y_test = bin_spikes(f, n_steps)
 
-    np.savez_compressed(cache_file, X_train=X_train, y_train=y_train,
-                        X_test=X_test, y_test=y_test)
+    np.savez_compressed(
+        cache_file, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test
+    )
     print(f"  train: {X_train.shape}, test: {X_test.shape}")
     return SHDDataset(X_train, y_train), SHDDataset(X_test, y_test)
 
@@ -181,7 +183,10 @@ def load_datasets(n_steps: int = T_STEPS) -> tuple:
 # Evaluation harness (fixed — do not modify)
 # ---------------------------------------------------------------------------
 
-def evaluate_accuracy(model, test_ds: SHDDataset, batch_size: int = EVAL_BATCH_SIZE) -> float:
+
+def evaluate_accuracy(
+    model, test_ds: SHDDataset, batch_size: int = EVAL_BATCH_SIZE
+) -> float:
     """
     Evaluate model accuracy on the full SHD test set.
 
@@ -200,9 +205,9 @@ def evaluate_accuracy(model, test_ds: SHDDataset, batch_size: int = EVAL_BATCH_S
     for x_batch, y_batch in test_ds.batches(batch_size, shuffle=False):
         # x_batch: (B, T, C) — transpose to (T, B, C) for network
         x_seq = x_batch.transpose(1, 0, 2)
-        traces = model(x_seq)          # (T, B, n_classes)
-        logits = traces.sum(axis=0)    # (B, n_classes)
-        preds  = logits.argmax(axis=-1)
+        traces = model(x_seq)  # (T, B, n_classes)
+        logits = traces.sum(axis=0)  # (B, n_classes)
+        preds = logits.argmax(axis=-1)
         mx.eval(preds)
         correct = int((preds == y_batch).sum().item())
         total_correct += correct
