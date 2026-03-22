@@ -5,3 +5,5 @@ b4c2c45	2.384104	3.3	discard	double total batch size to 2^17
 d90c93a	2.010251	3.3	keep	halve total batch size to 2^15
 ef3a2f4	1.823991	3.3	keep	halve batch to 2^14
 32ca7b5	1.785346	3.3	keep	halve batch to 2^13
+4d07331	1.801535	3.3	discard	increase matrix LR from 0.04 to 0.08
+8d94b44	1.735237	3.1	keep	replace ReLU^2 with SiLU activation
