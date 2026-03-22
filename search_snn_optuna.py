@@ -60,6 +60,16 @@ def parse_args() -> argparse.Namespace:
         help="Run a Verilator command after each ternary trial.",
     )
     parser.add_argument(
+        "--verilator-mode",
+        type=str,
+        default="command",
+        choices=["command", "lint"],
+        help=(
+            "Verilator execution mode: 'command' runs --verilator-command; "
+            "'lint' generates trial RTL and runs verilator --lint-only."
+        ),
+    )
+    parser.add_argument(
         "--verilator-command",
         type=str,
         default="verilator --version",
@@ -73,6 +83,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=120,
         help="Timeout for each Verilator run.",
+    )
+    parser.add_argument(
+        "--verilator-top",
+        type=str,
+        default="ternary_trial_top",
+        help="Top module name when --verilator-mode lint is used.",
+    )
+    parser.add_argument(
+        "--verilator-max-width",
+        type=int,
+        default=512,
+        help="Cap generated RTL bus widths for lint mode.",
     )
     return parser.parse_args()
 
@@ -180,6 +202,98 @@ def run_verilator_step(
     }
 
 
+def _write_trial_lint_sv(
+    *,
+    trial_dir: Path,
+    top_module: str,
+    cfg: ExperimentConfig,
+    max_width: int,
+) -> Path:
+    in_w = max(1, min(int(cfg.n_hidden), max_width))
+    out_w = max(1, min(int(cfg.n_layers * 32), max_width))
+    threshold_q = int(round(max(0.0, min(1.0, cfg.ternary_threshold)) * 1000.0))
+
+    sv = f"""module {top_module} #(
+    parameter int IN_W = {in_w},
+    parameter int OUT_W = {out_w},
+    parameter int TERNARY_THRESHOLD_Q = {threshold_q}
+)(
+    input  logic [IN_W-1:0]  in_bits,
+    output logic [OUT_W-1:0] out_bits
+);
+    logic [OUT_W-1:0] folded;
+    always_comb begin
+        // Deterministic fold so lint sees non-trivial combinational logic.
+        folded = {{OUT_W{{1'b0}}}};
+        for (int i = 0; i < OUT_W; i++) begin
+            folded[i] = in_bits[i % IN_W] ^ in_bits[(i + TERNARY_THRESHOLD_Q) % IN_W];
+        end
+        out_bits = folded;
+    end
+endmodule
+"""
+
+    sv_path = trial_dir / f"{top_module}.sv"
+    sv_path.write_text(sv, encoding="utf-8")
+    return sv_path
+
+
+def run_verilator_lint_step(
+    trial: optuna.trial.Trial,
+    cfg: ExperimentConfig,
+    metrics: dict[str, Any],
+    timeout_s: int,
+    *,
+    top_module: str,
+    max_width: int,
+) -> dict[str, Any]:
+    trial_dir = Path("experiments") / "verilator" / f"trial_{trial.number:04d}"
+    trial_dir.mkdir(parents=True, exist_ok=True)
+
+    payload: dict[str, Any] = {
+        "trial_number": trial.number,
+        "trial_params": trial.params,
+        "config": dataclasses.asdict(cfg),
+        "metrics": metrics,
+    }
+    with (trial_dir / "trial_context.json").open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+    sv_path = _write_trial_lint_sv(
+        trial_dir=trial_dir,
+        top_module=top_module,
+        cfg=cfg,
+        max_width=max_width,
+    )
+    command = [
+        "verilator",
+        "--lint-only",
+        "-Wall",
+        "--top-module",
+        top_module,
+        str(sv_path),
+    ]
+    result = subprocess.run(  # noqa: S603
+        command,
+        capture_output=True,
+        text=True,
+        timeout=max(1, timeout_s),
+        check=False,
+    )
+
+    return {
+        "mode": "lint",
+        "command": " ".join(command),
+        "returncode": result.returncode,
+        "stdout": result.stdout[-4000:],
+        "stderr": result.stderr[-4000:],
+        "passed": result.returncode == 0,
+        "trial_dir": str(trial_dir),
+        "rtl_file": str(sv_path),
+        "top_module": top_module,
+    }
+
+
 def main() -> None:
     args = parse_args()
 
@@ -203,13 +317,23 @@ def main() -> None:
         metrics = train_once(cfg)
 
         if args.ternary_search and args.run_verilator:
-            verilator = run_verilator_step(
-                trial,
-                cfg,
-                metrics,
-                command_template=args.verilator_command,
-                timeout_s=args.verilator_timeout_s,
-            )
+            if args.verilator_mode == "lint":
+                verilator = run_verilator_lint_step(
+                    trial,
+                    cfg,
+                    metrics,
+                    timeout_s=args.verilator_timeout_s,
+                    top_module=args.verilator_top,
+                    max_width=args.verilator_max_width,
+                )
+            else:
+                verilator = run_verilator_step(
+                    trial,
+                    cfg,
+                    metrics,
+                    command_template=args.verilator_command,
+                    timeout_s=args.verilator_timeout_s,
+                )
             metrics["verilator"] = verilator
             trial.set_user_attr("verilator_passed", bool(verilator["passed"]))
 

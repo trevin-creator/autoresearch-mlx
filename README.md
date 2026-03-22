@@ -50,6 +50,15 @@ uv run search_snn_optuna.py \
 	--ternary-search \
 	--run-verilator \
 	--verilator-command "verilator --version"
+
+# ternary search with auto-generated RTL lint per trial
+uv run search_snn_optuna.py \
+	--trials 10 \
+	--ternary-search \
+	--run-verilator \
+	--verilator-mode lint \
+	--verilator-top ternary_trial_top \
+	--verilator-max-width 512
 ```
 
 Each Verilator run writes trial context metadata to `experiments/verilator/trial_XXXX/trial_context.json` before executing the Verilator command.
