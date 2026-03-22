@@ -10,7 +10,8 @@ repos:
     hooks:
       - id: ty
         name: ty
-        entry: uvx ty@0.0.24 check
+        entry: uvx ty@0.0.24 check datagen/
         language: system
-        types: [python]
+        pass_filenames: false
+        always_run: true
         pass_filenames: false
