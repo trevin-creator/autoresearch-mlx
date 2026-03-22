@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """Build a README demo video from generated stereo event dataset outputs.
 
-The output video has a 3x2 layout:
+The output video has a 4x2 layout:
 - Row 1: left/right RGB preview
 - Row 2: left/right event frame (red=positive, blue=negative)
-- Row 3: drone-centric depth map (ground truth), shown duplicated left/right
+- Row 3: left/right per-camera depth ground truth
+- Row 4: center-camera depth GT + disparity GT
+
+An IMU overlay (acceleration and angular velocity in body frame) is shown
+for each frame when ``meta/imu.csv`` exists.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 import imageio.v2 as iio
@@ -39,6 +44,23 @@ def depth_image(depth: np.ndarray) -> np.ndarray:
 
     # Near is brighter for easier obstacle interpretation.
     norm = 1.0 - np.clip((d - lo) / (hi - lo), 0.0, 1.0)
+    gray = (norm * 255.0).astype(np.uint8)
+    return np.stack([gray, gray, gray], axis=-1)
+
+
+def disparity_image(disparity: np.ndarray) -> np.ndarray:
+    """Render disparity map to grayscale RGB for visualization."""
+    d = np.asarray(disparity, dtype=np.float32)
+    valid = np.isfinite(d) & (d > 0.0)
+    if not np.any(valid):
+        return np.zeros((*d.shape, 3), dtype=np.uint8)
+
+    lo = float(np.percentile(d[valid], 2.0))
+    hi = float(np.percentile(d[valid], 98.0))
+    if hi <= lo + 1e-6:
+        hi = lo + 1.0
+
+    norm = np.clip((d - lo) / (hi - lo), 0.0, 1.0)
     gray = (norm * 255.0).astype(np.uint8)
     return np.stack([gray, gray, gray], axis=-1)
 
@@ -86,24 +108,61 @@ def pad_to_macroblock(frame: np.ndarray, block: int = 16) -> np.ndarray:
     return padded
 
 
-def add_labels(frame: np.ndarray) -> np.ndarray:
+def load_imu_map(root: Path) -> dict[str, tuple[float, float, float, float, float, float]]:
+    """Load IMU rows keyed by zero-padded frame index."""
+    imu_csv = root / "meta" / "imu.csv"
+    if not imu_csv.exists():
+        return {}
+
+    imu_map: dict[str, tuple[float, float, float, float, float, float]] = {}
+    with open(imu_csv, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            idx = f"{int(row['frame_idx']):06d}"
+            imu_map[idx] = (
+                float(row["acc_bx"]),
+                float(row["acc_by"]),
+                float(row["acc_bz"]),
+                float(row["gyro_bx"]),
+                float(row["gyro_by"]),
+                float(row["gyro_bz"]),
+            )
+    return imu_map
+
+
+def add_labels(
+    frame: np.ndarray,
+    imu_row: tuple[float, float, float, float, float, float] | None,
+) -> np.ndarray:
     image = Image.fromarray(frame)
     draw = ImageDraw.Draw(image)
 
     h, w = frame.shape[:2]
     half_w = w // 2
-    row_h = h // 3
+    row_h = h // 4
     labels = [
         (8, 8, "Left RGB"),
         (half_w + 8, 8, "Right RGB"),
         (8, row_h + 8, "Left Events (+ red / - blue)"),
         (half_w + 8, row_h + 8, "Right Events (+ red / - blue)"),
-        (8, 2 * row_h + 8, "Depth GT (drone center, near bright)"),
-        (half_w + 8, 2 * row_h + 8, "Depth GT (drone center, near bright)"),
+        (8, 2 * row_h + 8, "Depth Left GT (near bright)"),
+        (half_w + 8, 2 * row_h + 8, "Depth Right GT (near bright)"),
+        (8, 3 * row_h + 8, "Depth GT (drone center, near bright)"),
+        (half_w + 8, 3 * row_h + 8, "Disparity GT (near bright)"),
     ]
     for x, y, text in labels:
-        draw.rectangle((x - 4, y - 2, x + 250, y + 16), fill=(0, 0, 0))
+        draw.rectangle((x - 4, y - 2, x + 300, y + 16), fill=(0, 0, 0))
         draw.text((x, y), text, fill=(255, 255, 255))
+
+    if imu_row is not None:
+        ax, ay, az, gx, gy, gz = imu_row
+        imu_text = (
+            f"IMU body-frame  acc[m/s^2]=({ax:+.2f}, {ay:+.2f}, {az:+.2f})  "
+            f"gyro[rad/s]=({gx:+.2f}, {gy:+.2f}, {gz:+.2f})"
+        )
+        y = h - 22
+        draw.rectangle((4, y - 2, min(w - 4, 700), y + 16), fill=(0, 0, 0))
+        draw.text((8, y), imu_text, fill=(255, 255, 255))
     return np.asarray(image)
 
 
@@ -117,6 +176,8 @@ def main() -> None:
     if not left_rgb_files:
         raise FileNotFoundError("No rgb_left_preview frames found in input dir")
 
+    imu_map = load_imu_map(root)
+
     writer = iio.get_writer(out.as_posix(), fps=args.fps, codec="libx264", quality=8)
     try:
         for left_path in left_rgb_files:
@@ -127,39 +188,42 @@ def main() -> None:
             depth_gt_path = root / "depth_gt" / f"{idx}.npy"
             left_depth_path = root / "depth_left" / f"{idx}.npy"
             right_depth_path = root / "depth_right" / f"{idx}.npy"
+            disparity_gt_path = root / "disparity_gt" / f"{idx}.npy"
 
             if not (right_path.exists() and left_evt_path.exists() and right_evt_path.exists()):
                 continue
 
-            if depth_gt_path.exists():
-                depth_mode = "gt"
-            elif left_depth_path.exists() and right_depth_path.exists():
-                depth_mode = "stereo-legacy"
-            else:
+            if not (
+                left_depth_path.exists()
+                and right_depth_path.exists()
+                and depth_gt_path.exists()
+                and disparity_gt_path.exists()
+            ):
                 continue
 
             rgb_l = np.load(left_path)
             rgb_r = np.load(right_path)
             ev_l = np.load(left_evt_path)["events"]
             ev_r = np.load(right_evt_path)["events"]
-            if depth_mode == "gt":
-                depth_l = np.load(depth_gt_path)
-                depth_r = depth_l
-            else:
-                depth_l = np.load(left_depth_path)
-                depth_r = np.load(right_depth_path)
+            depth_l = np.load(left_depth_path)
+            depth_r = np.load(right_depth_path)
+            depth_gt = np.load(depth_gt_path)
+            disparity_gt = np.load(disparity_gt_path)
 
             h, w = rgb_l.shape[:2]
             img_ev_l = event_image(h, w, ev_l)
             img_ev_r = event_image(h, w, ev_r)
             img_depth_l = depth_image(depth_l)
             img_depth_r = depth_image(depth_r)
+            img_depth_gt = depth_image(depth_gt)
+            img_disp_gt = disparity_image(disparity_gt)
 
             row_rgb = np.concatenate([rgb_l, rgb_r], axis=1)
             row_evt = np.concatenate([img_ev_l, img_ev_r], axis=1)
             row_depth = np.concatenate([img_depth_l, img_depth_r], axis=1)
-            frame = np.concatenate([row_rgb, row_evt, row_depth], axis=0)
-            frame = add_labels(frame)
+            row_gt = np.concatenate([img_depth_gt, img_disp_gt], axis=1)
+            frame = np.concatenate([row_rgb, row_evt, row_depth, row_gt], axis=0)
+            frame = add_labels(frame, imu_map.get(idx))
             frame = pad_to_macroblock(frame)
             writer.append_data(frame)
     finally:

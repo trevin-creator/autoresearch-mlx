@@ -28,9 +28,11 @@ Then point Claude Code or another coding agent at `program.md` and let it run th
 
 [3D render][stereo event camera simulation]
 
-Top row: stereo RGB (left camera, right camera). Bottom row: stereo event frames
+Top row: stereo RGB (left camera, right camera). Second row: stereo event frames
 (left events, right events), with positive polarity in red and negative polarity in blue.
-Third row: one drone-centric depth map (ground-truth, near is brighter), shown across both panels.
+Third row: per-camera stereo depth ground truth (left depth, right depth).
+Fourth row: overall drone-centric depth ground truth (center camera) and disparity ground truth.
+An IMU overlay shows body-frame acceleration and angular velocity for each frame.
 
 <video controls width="640" preload="metadata">
 	<source src="assets/stereo-event-camera-simulation-10s.mp4" type="video/mp4" />

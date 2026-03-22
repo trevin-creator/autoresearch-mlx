@@ -7,7 +7,7 @@ feed directly into the `spyx_mlx` training workflow.
 
 ## Pipeline overview
 
-```
+```text
 Genesis 3D scene
     ↓  high-rate stereo RGB + depth renders
 Per-pixel ESIM event model (datagen.emulator)
@@ -69,35 +69,43 @@ uv run train_vision.py --data-dir ./out_genesis_stereo_events
 
 ## Output layout
 
-```
+```text
 out_genesis_stereo_events/
   events_left/000000.npz, 000001.npz, ...
   events_right/000000.npz, 000001.npz, ...
   depth_left/000000.npy, ...
   depth_right/000000.npy, ...
+    depth_gt/000000.npy, ...
+    disparity_gt/000000.npy, ...
   rgb_left_preview/  (optional, --save-rgb)
   rgb_right_preview/ (optional)
   meta/
     calibration.json   — pinhole intrinsics, stereo extrinsics, timing
     poses.csv          — per-frame rig + left/right camera poses (quat)
     imu.csv            — per-frame body-frame accel + gyro
-    frames.csv         — per-frame file path index
+        frames.csv         — per-frame file paths (events + depth/disparity GT)
 ```
 
 Each `events_*.npz` contains `events` with shape `(N, 4)` and dtype int64:
 columns are `[t_us, x, y, polarity]`.
 
+Ground-truth outputs are synchronized at frame level: per-camera depth
+(`depth_left`, `depth_right`), center-camera depth (`depth_gt`), dense disparity
+(`disparity_gt`), 6-axis body-frame IMU (`meta/imu.csv`), and full rig/camera poses
+(`meta/poses.csv`).
+
 ## Module structure — `datagen/`
 
-```
+```text
 datagen/
   __init__.py       — public API re-exports
   config.py         — CameraConfig, StereoConfig, EventConfig, SimConfig, OutputConfig
   math_utils.py     — normalize, lookat_rotation, quat_from_rotmat, rotmat_to_rvec
-  trajectory.py     — ScriptedRigTrajectory (smooth forward flight + lateral oscillation)
+    trajectory.py     — ScriptedRigTrajectory (obstacle-aware forward slalom path)
   emulator.py       — EventCameraEmulator (ESIM-style per-pixel threshold model)
   writer.py         — DatasetWriter (events/depth/pose/IMU to disk)
-  scene.py          — GenesisStereoEventDataset (Genesis world + stereo rig + main loop)
+  scene.py          — GenesisStereoEventDataset
+                     (Genesis world + stereo rig + main loop)
 ```
 
 The emulator and writer work standalone without Genesis — useful for
