@@ -1,6 +1,2 @@
 commit	val_bpb	memory_gb	status	description
-383abb4	2.667000	26.9	keep	baseline (AdamW, default config)
-c67ad2a	2.695369	26.9	discard	lower weight decay to 0.1
-909dd59	2.588904	26.9	keep	halve total batch size to 2^16
-4161af3	2.533728	26.9	keep	increase matrix LR to 0.04
-5efc7aa	1.807902	20.7	keep	reduce depth from 8 to 4
+b47b620	2.454031	3.3	keep	baseline (reduced batch for 16GB)
