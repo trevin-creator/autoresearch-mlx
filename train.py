@@ -39,13 +39,13 @@ def has_ve(layer_idx, n_layer):
     return layer_idx % 2 == (n_layer - 1) % 2
 
 
-def create_additive_causal_mask(seq_len, dtype=mx.float32):
+def create_additive_causal_mask(seq_len, dtype=mx.bfloat16):
     indices = mx.arange(seq_len)
     blocked = indices[None, :] > indices[:, None]
     return mx.where(blocked, mx.array(float("-inf"), dtype=dtype), mx.array(0.0, dtype=dtype))
 
 
-def create_sliding_window_mask(seq_len, window_size, dtype=mx.float32):
+def create_sliding_window_mask(seq_len, window_size, dtype=mx.bfloat16):
     indices = mx.arange(seq_len)
     causal = indices[None, :] > indices[:, None]
     too_far = (indices[:, None] - indices[None, :]) >= window_size
