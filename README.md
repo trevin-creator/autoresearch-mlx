@@ -59,6 +59,18 @@ uv run search_snn_optuna.py \
 	--verilator-mode lint \
 	--verilator-top ternary_trial_top \
 	--verilator-max-width 512
+
+# ternary search with auto-generated RTL compile + simulation per trial
+# generates SystemVerilog + C++ testbench, builds with verilator -cc --exe --build,
+# runs the binary and captures per-step output; result logged to JSONL as metrics.verilator
+uv run search_snn_optuna.py \
+	--trials 10 \
+	--ternary-search \
+	--run-verilator \
+	--verilator-mode simulate \
+	--verilator-top ternary_trial_top \
+	--verilator-sim-width 32 \
+	--verilator-sim-steps 16
 ```
 
 Each Verilator run writes trial context metadata to `experiments/verilator/trial_XXXX/trial_context.json` before executing the Verilator command.

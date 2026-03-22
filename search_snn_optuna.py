@@ -63,10 +63,12 @@ def parse_args() -> argparse.Namespace:
         "--verilator-mode",
         type=str,
         default="command",
-        choices=["command", "lint"],
+        choices=["command", "lint", "simulate"],
         help=(
-            "Verilator execution mode: 'command' runs --verilator-command; "
-            "'lint' generates trial RTL and runs verilator --lint-only."
+            "Verilator execution mode: "
+            "'command' runs --verilator-command; "
+            "'lint' generates trial RTL and runs verilator --lint-only; "
+            "'simulate' generates RTL + C++ testbench, builds and runs."
         ),
     )
     parser.add_argument(
@@ -95,6 +97,21 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=512,
         help="Cap generated RTL bus widths for lint mode.",
+    )
+    parser.add_argument(
+        "--verilator-sim-width",
+        type=int,
+        default=32,
+        help=(
+            "Cap bus widths (<=32) for simulate mode so C++ testbench "
+            "can use plain uint32_t port access."
+        ),
+    )
+    parser.add_argument(
+        "--verilator-sim-steps",
+        type=int,
+        default=16,
+        help="Number of input stimulus steps driven in the C++ testbench.",
     )
     return parser.parse_args()
 
@@ -294,6 +311,136 @@ def run_verilator_lint_step(
     }
 
 
+def _write_trial_tb_cpp(
+    *,
+    trial_dir: Path,
+    top_module: str,
+    n_steps: int,
+) -> Path:
+    """Write a minimal Verilator C++ testbench that drives in_bits[0..n_steps-1]."""
+    cpp = f"""#include <cstdint>
+#include <iostream>
+#include "verilated.h"
+#include "V{top_module}.h"
+
+int main(int argc, char** argv) {{
+    Verilated::commandArgs(argc, argv);
+    V{top_module}* dut = new V{top_module};
+    uint32_t errors = 0;
+    for (uint32_t i = 0; i < {n_steps}u; ++i) {{
+        dut->in_bits = i;
+        dut->eval();
+        std::cout << "step " << i
+                  << " in=" << dut->in_bits
+                  << " out=" << (uint32_t)dut->out_bits << "\\n";
+    }}
+    dut->final();
+    delete dut;
+    std::cout << "DONE errors=" << errors << "\\n";
+    return (int)errors;
+}}
+"""
+    cpp_path = trial_dir / f"{top_module}_tb.cpp"
+    cpp_path.write_text(cpp, encoding="utf-8")
+    return cpp_path
+
+
+def run_verilator_simulate_step(
+    trial: optuna.trial.Trial,
+    cfg: ExperimentConfig,
+    metrics: dict[str, Any],
+    timeout_s: int,
+    *,
+    top_module: str,
+    sim_width: int,
+    sim_steps: int,
+) -> dict[str, Any]:
+    trial_dir = Path("experiments") / "verilator" / f"trial_{trial.number:04d}"
+    trial_dir.mkdir(parents=True, exist_ok=True)
+
+    payload: dict[str, Any] = {
+        "trial_number": trial.number,
+        "trial_params": trial.params,
+        "config": dataclasses.asdict(cfg),
+        "metrics": metrics,
+    }
+    with (trial_dir / "trial_context.json").open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+    # Generate RTL capped to sim_width so testbench uses plain uint32_t
+    sv_path = _write_trial_lint_sv(
+        trial_dir=trial_dir,
+        top_module=top_module,
+        cfg=cfg,
+        max_width=max(1, min(sim_width, 32)),
+    )
+    cpp_path = _write_trial_tb_cpp(
+        trial_dir=trial_dir,
+        top_module=top_module,
+        n_steps=sim_steps,
+    )
+
+    obj_dir = trial_dir / "obj_dir"
+    binary = obj_dir / f"V{top_module}"
+
+    # Compile step
+    build_cmd = [
+        "verilator",
+        "-cc",
+        "--exe",
+        "--build",
+        "-Wall",
+        "-Wno-DECLFILENAME",
+        "--top-module", top_module,
+        "-Mdir", str(obj_dir),
+        str(sv_path),
+        str(cpp_path),
+    ]
+    build_result = subprocess.run(  # noqa: S603
+        build_cmd,
+        capture_output=True,
+        text=True,
+        timeout=max(1, timeout_s),
+        check=False,
+    )
+
+    if build_result.returncode != 0:
+        return {
+            "mode": "simulate",
+            "stage": "build_failed",
+            "build_command": " ".join(build_cmd),
+            "build_returncode": build_result.returncode,
+            "build_stdout": build_result.stdout[-4000:],
+            "build_stderr": build_result.stderr[-4000:],
+            "passed": False,
+            "trial_dir": str(trial_dir),
+            "rtl_file": str(sv_path),
+        }
+
+    # Execution step
+    run_result = subprocess.run(  # noqa: S603
+        [str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=max(1, 30),
+        check=False,
+    )
+
+    return {
+        "mode": "simulate",
+        "stage": "simulated",
+        "build_command": " ".join(build_cmd),
+        "binary": str(binary),
+        "returncode": run_result.returncode,
+        "stdout": run_result.stdout[-4000:],
+        "stderr": run_result.stderr[-4000:],
+        "passed": run_result.returncode == 0,
+        "trial_dir": str(trial_dir),
+        "rtl_file": str(sv_path),
+        "top_module": top_module,
+    }
+
+
 def main() -> None:
     args = parse_args()
 
@@ -325,6 +472,16 @@ def main() -> None:
                     timeout_s=args.verilator_timeout_s,
                     top_module=args.verilator_top,
                     max_width=args.verilator_max_width,
+                )
+            elif args.verilator_mode == "simulate":
+                verilator = run_verilator_simulate_step(
+                    trial,
+                    cfg,
+                    metrics,
+                    timeout_s=args.verilator_timeout_s,
+                    top_module=args.verilator_top,
+                    sim_width=args.verilator_sim_width,
+                    sim_steps=args.verilator_sim_steps,
                 )
             else:
                 verilator = run_verilator_step(
