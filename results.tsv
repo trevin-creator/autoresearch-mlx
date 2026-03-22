@@ -12,3 +12,5 @@ ef3a2f4	1.823991	3.3	keep	halve batch to 2^14
 2848bfc	1.697757	3.0	discard	cosine LR decay instead of linear warmdown
 04e44ec	1.640671	3.0	keep	lower matrix LR from 0.04 to 0.02
 ae30e52	1.638309	3.0	keep	lower matrix LR to 0.01
+9890689	3.559808	3.0	discard	weight tying (share embed and unembed)
+eb81636	1.630049	3.0	keep	increase weight decay from 0.2 to 0.3
