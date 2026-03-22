@@ -30,7 +30,7 @@ Then point Claude Code or another coding agent at `program.md` and let it run th
 
 Top row: stereo RGB (left camera, right camera). Bottom row: stereo event frames
 (left events, right events), with positive polarity in red and negative polarity in blue.
-Third row: stereo depth maps (ground-truth), where near is brighter.
+Third row: one drone-centric depth map (ground-truth, near is brighter), shown across both panels.
 
 <video controls width="640" preload="metadata">
 	<source src="assets/stereo-event-camera-simulation-10s.mp4" type="video/mp4" />

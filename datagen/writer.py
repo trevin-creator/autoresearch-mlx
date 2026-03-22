@@ -20,8 +20,7 @@ class DatasetWriter:
         <out_dir>/
           events_left/000000.npz, ...
           events_right/000000.npz, ...
-          depth_left/000000.npy, ...
-          depth_right/000000.npy, ...
+                    depth_gt/000000.npy, ...
           rgb_left_preview/000000.npy, ...   (optional)
           rgb_right_preview/000000.npy, ...  (optional)
           meta/
@@ -36,8 +35,7 @@ class DatasetWriter:
 
         self.events_left_dir = self.root / "events_left"
         self.events_right_dir = self.root / "events_right"
-        self.depth_left_dir = self.root / "depth_left"
-        self.depth_right_dir = self.root / "depth_right"
+        self.depth_gt_dir = self.root / "depth_gt"
         self.rgb_left_dir = self.root / "rgb_left_preview"
         self.rgb_right_dir = self.root / "rgb_right_preview"
         self.meta_dir = self.root / "meta"
@@ -45,8 +43,7 @@ class DatasetWriter:
         for d in [
             self.events_left_dir,
             self.events_right_dir,
-            self.depth_left_dir,
-            self.depth_right_dir,
+            self.depth_gt_dir,
             self.rgb_left_dir,
             self.rgb_right_dir,
             self.meta_dir,
@@ -112,8 +109,7 @@ class DatasetWriter:
                 "t_us",
                 "events_left_path",
                 "events_right_path",
-                "depth_left_path",
-                "depth_right_path",
+                "depth_gt_path",
             ]
         )
 
@@ -132,9 +128,8 @@ class DatasetWriter:
         np.savez_compressed(out, events=events)
         return str(out.relative_to(self.root))
 
-    def write_depth(self, frame_idx: int, side: str, depth: np.ndarray) -> str:
-        d = self.depth_left_dir if side == "left" else self.depth_right_dir
-        out = d / f"{frame_idx:06d}.npy"
+    def write_depth_gt(self, frame_idx: int, depth: np.ndarray) -> str:
+        out = self.depth_gt_dir / f"{frame_idx:06d}.npy"
         np.save(out, depth)
         return str(out.relative_to(self.root))
 
@@ -183,8 +178,7 @@ class DatasetWriter:
         t_us: int,
         events_left_path: str,
         events_right_path: str,
-        depth_left_path: str,
-        depth_right_path: str,
+        depth_gt_path: str,
     ) -> None:
         self.frame_writer.writerow(
             [
@@ -192,8 +186,7 @@ class DatasetWriter:
                 t_us,
                 events_left_path,
                 events_right_path,
-                depth_left_path,
-                depth_right_path,
+                depth_gt_path,
             ]
         )
 
@@ -236,6 +229,10 @@ class DatasetWriter:
                     [0.0, 0.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0, 1.0],
                 ],
+            },
+            "depth_ground_truth": {
+                "camera": "rig_center",
+                "description": "Single depth map from drone center camera",
             },
             "timing": {
                 "sim_dt_s": sim_cfg.sim_dt,

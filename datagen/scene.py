@@ -50,6 +50,7 @@ class GenesisStereoEventDataset:
         self.scene: Any = None
         self.left_cam: Any = None
         self.right_cam: Any = None
+        self.center_cam: Any = None
 
         self.left_emu = EventCameraEmulator(
             height=cam_cfg.height,
@@ -299,6 +300,13 @@ class GenesisStereoEventDataset:
             up=self.stereo_cfg.rig_up_world,
             fov=self.cam_cfg.fov_deg,
         )
+        self.center_cam = self.scene.add_camera(
+            res=(self.cam_cfg.width, self.cam_cfg.height),
+            pos=(0.0, 0.0, 1.2),
+            lookat=(1.0, 0.0, 1.2),
+            up=self.stereo_cfg.rig_up_world,
+            fov=self.cam_cfg.fov_deg,
+        )
 
         self.scene.build()
 
@@ -345,6 +353,12 @@ class GenesisStereoEventDataset:
         self.right_cam.set_pose(
             pos=tuple(poses["right_pos"].tolist()),
             lookat=tuple(poses["right_lookat"].tolist()),
+            up=tuple(poses["up"].tolist()),
+        )
+        rig_forward = R_wc[:, 2]
+        self.center_cam.set_pose(
+            pos=tuple(rig_pos.tolist()),
+            lookat=tuple((rig_pos + rig_forward).tolist()),
             up=tuple(poses["up"].tolist()),
         )
 
@@ -395,6 +409,11 @@ class GenesisStereoEventDataset:
         rgb_right, depth_right = self._extract_rgb_depth(right_out)
         return rgb_left, depth_left, rgb_right, depth_right
 
+    def render_depth_gt(self) -> np.ndarray:
+        center_out = self.center_cam.render(depth=True)
+        _, depth_gt = self._extract_rgb_depth(center_out)
+        return depth_gt
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -417,7 +436,8 @@ class GenesisStereoEventDataset:
             t_us = int(round(t * 1e6))
 
             pose_info = self.update_camera_poses(t)
-            rgb_left, depth_left, rgb_right, depth_right = self.render_pair()
+            rgb_left, _depth_left, rgb_right, _depth_right = self.render_pair()
+            depth_gt = self.render_depth_gt()
 
             events_left = self.left_emu.step(rgb_left, t_us=t_us)
             events_right = self.right_emu.step(rgb_right, t_us=t_us)
@@ -428,13 +448,9 @@ class GenesisStereoEventDataset:
             )
 
             if step_idx % self.sim_cfg.export_every_n_depth == 0:
-                left_depth_path = self.writer.write_depth(step_idx, "left", depth_left)
-                right_depth_path = self.writer.write_depth(
-                    step_idx, "right", depth_right
-                )
+                depth_gt_path = self.writer.write_depth_gt(step_idx, depth_gt)
             else:
-                left_depth_path = ""
-                right_depth_path = ""
+                depth_gt_path = ""
 
             if self.out_cfg.save_rgb_preview:
                 self.writer.write_rgb_preview(step_idx, "left", rgb_left)
@@ -460,8 +476,7 @@ class GenesisStereoEventDataset:
                 t_us=t_us,
                 events_left_path=left_events_path,
                 events_right_path=right_events_path,
-                depth_left_path=left_depth_path,
-                depth_right_path=right_depth_path,
+                depth_gt_path=depth_gt_path,
             )
 
             if step_idx % 100 == 0:

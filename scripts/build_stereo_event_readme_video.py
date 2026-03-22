@@ -4,7 +4,7 @@
 The output video has a 3x2 layout:
 - Row 1: left/right RGB preview
 - Row 2: left/right event frame (red=positive, blue=negative)
-- Row 3: left/right depth maps (ground truth)
+- Row 3: drone-centric depth map (ground truth), shown duplicated left/right
 """
 
 from __future__ import annotations
@@ -98,8 +98,8 @@ def add_labels(frame: np.ndarray) -> np.ndarray:
         (half_w + 8, 8, "Right RGB"),
         (8, row_h + 8, "Left Events (+ red / - blue)"),
         (half_w + 8, row_h + 8, "Right Events (+ red / - blue)"),
-        (8, 2 * row_h + 8, "Left Depth GT (near bright)"),
-        (half_w + 8, 2 * row_h + 8, "Right Depth GT (near bright)"),
+        (8, 2 * row_h + 8, "Depth GT (drone center, near bright)"),
+        (half_w + 8, 2 * row_h + 8, "Depth GT (drone center, near bright)"),
     ]
     for x, y, text in labels:
         draw.rectangle((x - 4, y - 2, x + 250, y + 16), fill=(0, 0, 0))
@@ -124,24 +124,30 @@ def main() -> None:
             right_path = root / "rgb_right_preview" / f"{idx}.npy"
             left_evt_path = root / "events_left" / f"{idx}.npz"
             right_evt_path = root / "events_right" / f"{idx}.npz"
+            depth_gt_path = root / "depth_gt" / f"{idx}.npy"
             left_depth_path = root / "depth_left" / f"{idx}.npy"
             right_depth_path = root / "depth_right" / f"{idx}.npy"
 
-            if not (
-                right_path.exists()
-                and left_evt_path.exists()
-                and right_evt_path.exists()
-                and left_depth_path.exists()
-                and right_depth_path.exists()
-            ):
+            if not (right_path.exists() and left_evt_path.exists() and right_evt_path.exists()):
+                continue
+
+            if depth_gt_path.exists():
+                depth_mode = "gt"
+            elif left_depth_path.exists() and right_depth_path.exists():
+                depth_mode = "stereo-legacy"
+            else:
                 continue
 
             rgb_l = np.load(left_path)
             rgb_r = np.load(right_path)
             ev_l = np.load(left_evt_path)["events"]
             ev_r = np.load(right_evt_path)["events"]
-            depth_l = np.load(left_depth_path)
-            depth_r = np.load(right_depth_path)
+            if depth_mode == "gt":
+                depth_l = np.load(depth_gt_path)
+                depth_r = depth_l
+            else:
+                depth_l = np.load(left_depth_path)
+                depth_r = np.load(right_depth_path)
 
             h, w = rgb_l.shape[:2]
             img_ev_l = event_image(h, w, ev_l)
