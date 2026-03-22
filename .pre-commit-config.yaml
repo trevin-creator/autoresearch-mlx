@@ -3,8 +3,10 @@ repos:
     rev: v0.15.7
     hooks:
       - id: ruff-format
+        files: ^(datagen/.*\.py|generate_stereo_events\.py)$
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
+        files: ^(datagen/.*\.py|generate_stereo_events\.py)$
 
   - repo: local
     hooks:
@@ -14,4 +16,3 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
-        pass_filenames: false
