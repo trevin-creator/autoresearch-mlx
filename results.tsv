@@ -1,2 +1,3 @@
 commit	val_bpb	memory_gb	status	description
 b47b620	2.454031	3.3	keep	baseline (reduced batch for 16GB)
+f29203d	2.256486	3.3	keep	reduce depth from 4 to 2
