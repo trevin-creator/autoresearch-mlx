@@ -488,6 +488,10 @@ def _configs_for_profile(profile: str):
     raise ValueError(f"Unsupported benchmark profile: {profile}")
 
 
+def _profile_json_path(base: Path, profile: str) -> Path:
+    return base.with_name(f"{base.stem}_{profile}{base.suffix}")
+
+
 def _replace_param_named(tree, name: str, value):
     if isinstance(tree, dict):
         updated = {}
@@ -675,140 +679,20 @@ def _run_parity_gate(run_parity_checks: bool) -> tuple[bool, str]:
     return False, output
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark spyx (JAX) vs spyx_mlx (MLX)"
-    )
-    parser.add_argument("--repeats", type=int, default=8)
-    parser.add_argument("--warmup-repeats", type=int, default=2)
-    parser.add_argument(
-        "--benchmark-kind",
-        choices=["forward", "train-step"],
-        default="forward",
-        help="Benchmark forward pass only, or full training step (forward+backward).",
-    )
-    parser.add_argument(
-        "--profile",
-        choices=["latency", "throughput"],
-        default="latency",
-        help="Benchmark shape profile: latency-oriented or throughput-oriented.",
-    )
-    parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
-    parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
-    parser.add_argument("--skip-jax", action="store_true")
-    parser.add_argument("--skip-mlx", action="store_true")
-    parser.add_argument(
-        "--parity-gate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Run parity tests before benchmarking and abort if they fail.",
-    )
-    parser.add_argument(
-        "--auto-skip-incompatible-jax-metal",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="If JAX Metal stack is likely incompatible, skip JAX timing and continue with MLX.",
-    )
-    parser.add_argument(
-        "--bench-parity-check",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Run per-neuron JAX-vs-MLX forward parity checks before timing.",
-    )
-    parser.add_argument(
-        "--allow-bench-on-parity-fail",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Continue timing neurons even if benchmark parity check fails.",
-    )
-    parser.add_argument(
-        "--fail-on-bench-parity-mismatch",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Exit non-zero if any benchmark parity precheck mismatches.",
-    )
-    parser.add_argument("--bench-parity-batch", type=int, default=8)
-    parser.add_argument("--bench-parity-hidden", type=int, default=64)
-    parser.add_argument("--bench-parity-steps", type=int, default=16)
-    parser.add_argument("--bench-parity-trials", type=int, default=3)
-    parser.add_argument("--bench-parity-seed", type=int, default=123)
-    parser.add_argument("--bench-parity-atol", type=float, default=1e-5)
-    parser.add_argument("--bench-parity-rtol", type=float, default=1e-5)
-    parser.add_argument(
-        "--max-allowed-cv",
-        type=float,
-        default=0.35,
-        help="Maximum allowed coefficient of variation for timed results (higher means noisy run).",
-    )
-    parser.add_argument(
-        "--enforce-mlx-better",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Exit non-zero unless aggregate MLX speedup beats JAX and stability checks pass.",
-    )
-    parser.add_argument(
-        "--min-geomean-speedup",
-        type=float,
-        default=1.0,
-        help="Minimum aggregate geometric-mean speedup required when enforcement is enabled.",
-    )
-    parser.add_argument(
-        "--min-win-rate",
-        type=float,
-        default=0.5,
-        help="Minimum fraction of configs where MLX must beat JAX when enforcement is enabled.",
-    )
-    args = parser.parse_args()
-
-    if args.mlx_device == "cpu":
-        mx.set_default_device(mx.cpu)
-    elif args.mlx_device == "gpu":
-        mx.set_default_device(mx.gpu)
-
-    parity_ok, parity_output = _run_parity_gate(args.parity_gate)
-    if not parity_ok:
-        print("Parity gate failed. Refusing to run benchmark timings.")
-        print(parity_output)
-        payload = {
-            "run_config": {
-                "repeats": args.repeats,
-                "mlx_device": args.mlx_device,
-                "skip_jax": args.skip_jax,
-                "skip_mlx": args.skip_mlx,
-                "parity_gate": args.parity_gate,
-            },
-            "results": [],
-            "failures": [
-                {
-                    "backend": "parity-gate",
-                    "neuron": "ALL",
-                    "config": "preflight",
-                    "error": "Parity tests failed; see parity_gate_output.",
-                }
-            ],
-            "parity_gate_output": parity_output,
-        }
-        args.json.write_text(json.dumps(payload, indent=2))
-        raise SystemExit(2)
-
-    configs = _configs_for_profile(args.profile)
+def _run_single_profile(
+    *,
+    args,
+    profile: str,
+    output_json: Path,
+    parity_output: str,
+    effective_skip_jax: bool,
+    jax_stack: dict[str, str | None],
+    compat_warning: str | None,
+    jax_backend_name: str,
+    mlx_backend_name: str,
+):
+    configs = _configs_for_profile(profile)
     neurons = ["IF", "LIF", "ALIF", "CuBaLIF", "RLIF"]
-    jax_backend_name = f"spyx-jax-{jax.default_backend().lower()}"
-    mlx_backend_name = (
-        "spyx-mlx-gpu" if "gpu" in str(mx.default_device()).lower() else "spyx-mlx-cpu"
-    )
-
-    jax_stack = _jax_stack_info()
-    compat_warning = _metal_compat_warning(jax_stack)
-    effective_skip_jax = args.skip_jax
-    if compat_warning:
-        print(f"Compatibility warning: {compat_warning}")
-        if args.auto_skip_incompatible_jax_metal and not args.skip_jax:
-            effective_skip_jax = True
-            print("Auto-skip enabled: skipping JAX timings for this run.")
-
-    print(f"JAX backend: {jax.default_backend()}")
-    print(f"MLX default device: {mx.default_device()}")
 
     rows: list[BenchResult] = []
     failures: list[dict[str, str]] = []
@@ -816,8 +700,9 @@ def main():
     blocked_neurons: set[str] = set()
     bench_parity_mismatch = False
 
+    print(f"\n=== Running profile: {profile} ===")
     if args.bench_parity_check and not effective_skip_jax and not args.skip_mlx:
-        print("\nRunning benchmark parity prechecks...")
+        print("Running benchmark parity prechecks...")
         for neuron in neurons:
             check = _parity_check_neuron(
                 neuron=neuron,
@@ -946,7 +831,7 @@ def main():
             "repeats": args.repeats,
             "warmup_repeats": args.warmup_repeats,
             "benchmark_kind": args.benchmark_kind,
-            "profile": args.profile,
+            "profile": profile,
             "mlx_device": args.mlx_device,
             "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
@@ -993,14 +878,14 @@ def main():
         and win_rate > 0.5
     )
     payload["verdict"] = {
-        "profile": args.profile,
+        "profile": profile,
         "benchmark_kind": args.benchmark_kind,
         "mlx_faster": mlx_faster,
         "geomean_speedup": geomean,
         "win_rate": win_rate,
     }
 
-    args.json.write_text(json.dumps(payload, indent=2))
+    output_json.write_text(json.dumps(payload, indent=2))
 
     summary_unit = "ms/train-step" if args.benchmark_kind == "train-step" else "ms/step"
     print(f"\nSummary ({summary_unit}, lower is better):")
@@ -1059,15 +944,16 @@ def main():
 
     print("\nVerdict:")
     print(
-        f"profile={args.profile} kind={args.benchmark_kind} "
+        f"profile={profile} kind={args.benchmark_kind} "
         f"mlx_faster={'YES' if mlx_faster else 'NO'}"
     )
 
-    print(f"\nWrote: {args.json}")
+    print(f"\nWrote: {output_json}")
 
+    exit_code = 0
     if args.fail_on_bench_parity_mismatch and bench_parity_mismatch:
         print("Hard-fail enabled: benchmark parity mismatches were detected.")
-        raise SystemExit(3)
+        exit_code = 3
 
     if args.enforce_mlx_better:
         geomean = aggregate["geomean_speedup"]
@@ -1081,7 +967,225 @@ def main():
             or len(noisy_rows) > 0
         ):
             print("Enforcement failed: MLX benchmark quality/speed targets not met.")
-            raise SystemExit(4)
+            exit_code = max(exit_code, 4)
+
+    return payload, exit_code
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Benchmark spyx (JAX) vs spyx_mlx (MLX)"
+    )
+    parser.add_argument("--repeats", type=int, default=8)
+    parser.add_argument("--warmup-repeats", type=int, default=2)
+    parser.add_argument(
+        "--benchmark-kind",
+        choices=["forward", "train-step"],
+        default="forward",
+        help="Benchmark forward pass only, or full training step (forward+backward).",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=["latency", "throughput"],
+        default="latency",
+        help="Benchmark shape profile: latency-oriented or throughput-oriented.",
+    )
+    parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
+    parser.add_argument(
+        "--competition",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run both latency and throughput profiles and write a combined competition report.",
+    )
+    parser.add_argument(
+        "--competition-json",
+        type=Path,
+        default=Path("bench_spyx_vs_mlx_competition.json"),
+        help="Output path for combined competition report.",
+    )
+    parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
+    parser.add_argument("--skip-jax", action="store_true")
+    parser.add_argument("--skip-mlx", action="store_true")
+    parser.add_argument(
+        "--parity-gate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run parity tests before benchmarking and abort if they fail.",
+    )
+    parser.add_argument(
+        "--auto-skip-incompatible-jax-metal",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If JAX Metal stack is likely incompatible, skip JAX timing and continue with MLX.",
+    )
+    parser.add_argument(
+        "--bench-parity-check",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run per-neuron JAX-vs-MLX forward parity checks before timing.",
+    )
+    parser.add_argument(
+        "--allow-bench-on-parity-fail",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Continue timing neurons even if benchmark parity check fails.",
+    )
+    parser.add_argument(
+        "--fail-on-bench-parity-mismatch",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Exit non-zero if any benchmark parity precheck mismatches.",
+    )
+    parser.add_argument("--bench-parity-batch", type=int, default=8)
+    parser.add_argument("--bench-parity-hidden", type=int, default=64)
+    parser.add_argument("--bench-parity-steps", type=int, default=16)
+    parser.add_argument("--bench-parity-trials", type=int, default=3)
+    parser.add_argument("--bench-parity-seed", type=int, default=123)
+    parser.add_argument("--bench-parity-atol", type=float, default=1e-5)
+    parser.add_argument("--bench-parity-rtol", type=float, default=1e-5)
+    parser.add_argument(
+        "--max-allowed-cv",
+        type=float,
+        default=0.35,
+        help="Maximum allowed coefficient of variation for timed results (higher means noisy run).",
+    )
+    parser.add_argument(
+        "--enforce-mlx-better",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Exit non-zero unless aggregate MLX speedup beats JAX and stability checks pass.",
+    )
+    parser.add_argument(
+        "--min-geomean-speedup",
+        type=float,
+        default=1.0,
+        help="Minimum aggregate geometric-mean speedup required when enforcement is enabled.",
+    )
+    parser.add_argument(
+        "--min-win-rate",
+        type=float,
+        default=0.5,
+        help="Minimum fraction of configs where MLX must beat JAX when enforcement is enabled.",
+    )
+    args = parser.parse_args()
+
+    if args.mlx_device == "cpu":
+        mx.set_default_device(mx.cpu)
+    elif args.mlx_device == "gpu":
+        mx.set_default_device(mx.gpu)
+
+    parity_ok, parity_output = _run_parity_gate(args.parity_gate)
+    if not parity_ok:
+        print("Parity gate failed. Refusing to run benchmark timings.")
+        print(parity_output)
+        payload = {
+            "run_config": {
+                "repeats": args.repeats,
+                "mlx_device": args.mlx_device,
+                "skip_jax": args.skip_jax,
+                "skip_mlx": args.skip_mlx,
+                "parity_gate": args.parity_gate,
+            },
+            "results": [],
+            "failures": [
+                {
+                    "backend": "parity-gate",
+                    "neuron": "ALL",
+                    "config": "preflight",
+                    "error": "Parity tests failed; see parity_gate_output.",
+                }
+            ],
+            "parity_gate_output": parity_output,
+        }
+        args.json.write_text(json.dumps(payload, indent=2))
+        raise SystemExit(2)
+
+    jax_backend_name = f"spyx-jax-{jax.default_backend().lower()}"
+    mlx_backend_name = (
+        "spyx-mlx-gpu" if "gpu" in str(mx.default_device()).lower() else "spyx-mlx-cpu"
+    )
+
+    jax_stack = _jax_stack_info()
+    compat_warning = _metal_compat_warning(jax_stack)
+    effective_skip_jax = args.skip_jax
+    if compat_warning:
+        print(f"Compatibility warning: {compat_warning}")
+        if args.auto_skip_incompatible_jax_metal and not args.skip_jax:
+            effective_skip_jax = True
+            print("Auto-skip enabled: skipping JAX timings for this run.")
+
+    print(f"JAX backend: {jax.default_backend()}")
+    print(f"MLX default device: {mx.default_device()}")
+    profiles = ["latency", "throughput"] if args.competition else [args.profile]
+    per_profile_payload: dict[str, dict] = {}
+    exit_code = 0
+
+    for profile in profiles:
+        profile_json = _profile_json_path(args.json, profile) if args.competition else args.json
+        payload, profile_exit = _run_single_profile(
+            args=args,
+            profile=profile,
+            output_json=profile_json,
+            parity_output=parity_output,
+            effective_skip_jax=effective_skip_jax,
+            jax_stack=jax_stack,
+            compat_warning=compat_warning,
+            jax_backend_name=jax_backend_name,
+            mlx_backend_name=mlx_backend_name,
+        )
+        per_profile_payload[profile] = payload
+        exit_code = max(exit_code, profile_exit)
+
+    if args.competition:
+        verdicts = {
+            profile: data.get("verdict", {}) for profile, data in per_profile_payload.items()
+        }
+        both_profiles_pass = all(
+            bool(v.get("mlx_faster", False)) for v in verdicts.values()
+        )
+
+        geomeans = {
+            profile: v.get("geomean_speedup") for profile, v in verdicts.items()
+        }
+        best_profile = max(
+            geomeans,
+            key=lambda p: geomeans[p] if isinstance(geomeans[p], (float, int)) else float("-inf"),
+        )
+        competition_payload = {
+            "run_config": {
+                "benchmark_kind": args.benchmark_kind,
+                "competition": True,
+                "profiles": profiles,
+                "json_base": str(args.json),
+            },
+            "profiles": per_profile_payload,
+            "competition_verdict": {
+                "mlx_faster_all_profiles": both_profiles_pass,
+                "best_profile_by_geomean": best_profile,
+                "recommendation": (
+                    "MLX wins across latency and throughput profiles"
+                    if both_profiles_pass
+                    else "Mixed results: choose backend per profile"
+                ),
+            },
+        }
+        args.competition_json.write_text(json.dumps(competition_payload, indent=2))
+        print("\n=== Competition Verdict ===")
+        for profile in profiles:
+            verdict = verdicts.get(profile, {})
+            print(
+                f"{profile}: mlx_faster={'YES' if verdict.get('mlx_faster') else 'NO'} "
+                f"geomean_speedup={verdict.get('geomean_speedup')} "
+                f"win_rate={verdict.get('win_rate')}"
+            )
+        print(
+            f"overall_mlx_faster={'YES' if both_profiles_pass else 'NO'} "
+            f"best_profile={best_profile}"
+        )
+        print(f"Wrote competition report: {args.competition_json}")
+
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
