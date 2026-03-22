@@ -24,6 +24,12 @@ _texture_smoke*/
 # Local scratch artifacts
 TEST_COMMIT.txt
 
+# Benchmark output JSONs (generated locally)
+bench_*.json
+
+# Local-only research / scratch notes
+biomimicry.md
+
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md
