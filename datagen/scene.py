@@ -9,6 +9,7 @@ Requires the ``genesis`` package (``pip install genesis-world``).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -63,6 +64,62 @@ class GenesisStereoEventDataset:
             rng=self.rng,
         )
 
+    @staticmethod
+    def _checker_texture(
+        size: int,
+        tile: int,
+        color_a: tuple[int, int, int],
+        color_b: tuple[int, int, int],
+    ) -> np.ndarray:
+        yy, xx = np.indices((size, size))
+        pattern = ((xx // tile) + (yy // tile)) % 2
+        tex = np.empty((size, size, 3), dtype=np.uint8)
+        tex[pattern == 0] = color_a
+        tex[pattern == 1] = color_b
+        return tex
+
+    @staticmethod
+    def _stripe_texture(
+        size: int,
+        stripe: int,
+        color_a: tuple[int, int, int],
+        color_b: tuple[int, int, int],
+    ) -> np.ndarray:
+        _, xx = np.indices((size, size))
+        pattern = (xx // stripe) % 2
+        tex = np.empty((size, size, 3), dtype=np.uint8)
+        tex[pattern == 0] = color_a
+        tex[pattern == 1] = color_b
+        return tex
+
+    @staticmethod
+    def _surface_from_texture(
+        tex: np.ndarray,
+        roughness: float = 0.75,
+        metallic: float = 0.0,
+    ) -> Any:
+        _gs = gs
+        if _gs is None:
+            msg = "Genesis is required. Install with: pip install genesis-world"
+            raise ImportError(msg)
+        return _gs.surfaces.Rough(
+            diffuse_texture=_gs.textures.ImageTexture(image_array=tex),
+            roughness=roughness,
+            metallic=metallic,
+        )
+
+    @staticmethod
+    def _surface_from_color(
+        color: tuple[float, float, float],
+        roughness: float = 0.8,
+        metallic: float = 0.0,
+    ) -> Any:
+        _gs = gs
+        if _gs is None:
+            msg = "Genesis is required. Install with: pip install genesis-world"
+            raise ImportError(msg)
+        return _gs.surfaces.Rough(color=color, roughness=roughness, metallic=metallic)
+
     def build_scene(self) -> None:
         if gs is None:
             msg = "Genesis is required. Install with: pip install genesis-world"
@@ -81,17 +138,54 @@ class GenesisStereoEventDataset:
             ),
         )
 
-        # Placeholder geometry — replace with real Genesis world assets.
-        self.scene.add_entity(gs.morphs.Plane())
-        self.scene.add_entity(gs.morphs.Box(pos=(5.0, 0.0, 0.5), size=(1.0, 1.0, 1.0)))
-        self.scene.add_entity(gs.morphs.Box(pos=(8.0, 1.2, 0.75), size=(1.5, 1.0, 1.5)))
+        # Procedural textures keep the scene visually distinct for stereo demos.
+        ground_tex = self._checker_texture(512, 32, (76, 82, 86), (58, 63, 67))
+        box1_tex = self._checker_texture(256, 16, (154, 108, 72), (118, 80, 52))
+        box2_tex = self._checker_texture(256, 12, (64, 136, 198), (32, 90, 148))
+        box3_tex = self._checker_texture(256, 10, (196, 132, 58), (122, 76, 38))
+        cube_mesh = (
+            Path(__file__).resolve().parents[1] / "assets" / "meshes" / "uv_cube.obj"
+        )
+
         self.scene.add_entity(
-            gs.morphs.Box(pos=(12.0, -1.0, 1.0), size=(2.0, 1.5, 2.0))
+            gs.morphs.Plane(),
+            surface=self._surface_from_texture(ground_tex, roughness=0.95),
         )
         self.scene.add_entity(
-            gs.morphs.Cylinder(pos=(15.0, 0.8, 0.75), radius=0.5, height=1.5)
+            gs.morphs.Mesh(
+                file=str(cube_mesh),
+                scale=(1.0, 1.0, 1.0),
+                pos=(5.0, 0.0, 0.5),
+                fixed=True,
+            ),
+            surface=self._surface_from_texture(box1_tex, roughness=0.85),
         )
-        self.scene.add_entity(gs.morphs.Sphere(pos=(18.0, -0.5, 1.0), radius=0.8))
+        self.scene.add_entity(
+            gs.morphs.Mesh(
+                file=str(cube_mesh),
+                scale=(1.5, 1.0, 1.5),
+                pos=(8.0, 1.2, 0.75),
+                fixed=True,
+            ),
+            surface=self._surface_from_texture(box2_tex, roughness=0.8),
+        )
+        self.scene.add_entity(
+            gs.morphs.Mesh(
+                file=str(cube_mesh),
+                scale=(2.0, 1.5, 2.0),
+                pos=(12.0, -1.0, 1.0),
+                fixed=True,
+            ),
+            surface=self._surface_from_texture(box3_tex, roughness=0.82),
+        )
+        self.scene.add_entity(
+            gs.morphs.Cylinder(pos=(15.0, 0.8, 0.75), radius=0.5, height=1.5),
+            surface=self._surface_from_color((0.85, 0.72, 0.2), roughness=0.55),
+        )
+        self.scene.add_entity(
+            gs.morphs.Sphere(pos=(18.0, -0.5, 1.0), radius=0.8),
+            surface=self._surface_from_color((0.68, 0.22, 0.24), roughness=0.35),
+        )
 
         half_b = self.stereo_cfg.baseline_m / 2.0
         self.left_cam = self.scene.add_camera(
