@@ -1,0 +1,42 @@
+pipeline:
+  name: snn_quant_pipeline
+
+fixed_search:
+  trials: 8
+  study_name: snn-fixed-search
+  storage: sqlite:///experiments/snn_optuna.db
+  time_budget_s: 300
+  log_jsonl: experiments/snn_fixed_trials.jsonl
+  timeout_s: 5400
+  stage_log_jsonl: experiments/quant_pipeline/stage_runs.jsonl
+  fixed_point_bits_min: 4
+  fixed_point_bits_max: 12
+  fixed_point_frac_min: 1
+  fixed_point_frac_max: 8
+  fixed_point_rounding_options: nearest,floor
+
+ternary_search:
+  trials: 12
+  study_name: snn-ternary-search
+  storage: sqlite:///experiments/snn_optuna.db
+  time_budget_s: 300
+  log_jsonl: experiments/snn_ternary_trials.jsonl
+  timeout_s: 7200
+  stage_log_jsonl: experiments/quant_pipeline/stage_runs.jsonl
+  ternary_threshold_min: 0.02
+  ternary_threshold_max: 0.35
+
+verilator_stage:
+  trials: 6
+  study_name: snn-ternary-verilator
+  storage: sqlite:///experiments/snn_optuna.db
+  time_budget_s: 240
+  log_jsonl: experiments/snn_ternary_verilator_trials.jsonl
+  timeout_s: 7200
+  stage_log_jsonl: experiments/quant_pipeline/stage_runs.jsonl
+  verilator_mode: lint
+  verilator_timeout_s: 120
+  verilator_top: ternary_trial_top
+  verilator_max_width: 512
+  verilator_sim_width: 32
+  verilator_sim_steps: 16

@@ -43,6 +43,41 @@ def parse_args() -> argparse.Namespace:
         help="Enable ternary mode and search ternary hyperparameters.",
     )
     parser.add_argument(
+        "--fixed-point-search",
+        action="store_true",
+        help="Enable fixed-point mode and search fixed-point hyperparameters.",
+    )
+    parser.add_argument(
+        "--fixed-point-bits-min",
+        type=int,
+        default=4,
+        help="Lower bound for fixed-point total bit-width search.",
+    )
+    parser.add_argument(
+        "--fixed-point-bits-max",
+        type=int,
+        default=12,
+        help="Upper bound for fixed-point total bit-width search.",
+    )
+    parser.add_argument(
+        "--fixed-point-frac-min",
+        type=int,
+        default=1,
+        help="Lower bound for fixed-point fractional bits search.",
+    )
+    parser.add_argument(
+        "--fixed-point-frac-max",
+        type=int,
+        default=8,
+        help="Upper bound for fixed-point fractional bits search.",
+    )
+    parser.add_argument(
+        "--fixed-point-rounding-options",
+        type=str,
+        default="nearest,floor",
+        help="Comma-separated fixed-point round modes to sample from.",
+    )
+    parser.add_argument(
         "--ternary-threshold-min",
         type=float,
         default=0.02,
@@ -138,10 +173,25 @@ def build_config(
     time_budget_s: float,
     *,
     ternary_search: bool,
+    fixed_point_search: bool,
+    fixed_point_bits_min: int,
+    fixed_point_bits_max: int,
+    fixed_point_frac_min: int,
+    fixed_point_frac_max: int,
+    fixed_point_rounding_options: list[str],
     ternary_threshold_min: float,
     ternary_threshold_max: float,
 ) -> ExperimentConfig:
-    if ternary_search:
+    if ternary_search and fixed_point_search:
+        weight_mode = trial.suggest_categorical("weight_mode", ["fixed", "ternary"])
+    elif ternary_search:
+        weight_mode = "ternary"
+    elif fixed_point_search:
+        weight_mode = "fixed"
+    else:
+        weight_mode = "float"
+
+    if weight_mode == "ternary":
         ternary_threshold = trial.suggest_float(
             "ternary_threshold",
             min(ternary_threshold_min, ternary_threshold_max),
@@ -151,12 +201,37 @@ def build_config(
             "ternary_scale_mode", ["mean_abs", "max_abs"]
         )
         ternary_use_ste = trial.suggest_categorical("ternary_use_ste", [True, False])
-        weight_mode = "ternary"
     else:
         ternary_threshold = ExperimentConfig.ternary_threshold
         ternary_scale_mode = ExperimentConfig.ternary_scale_mode
         ternary_use_ste = ExperimentConfig.ternary_use_ste
-        weight_mode = "float"
+
+    if weight_mode == "fixed":
+        fixed_point_bits = trial.suggest_int(
+            "fixed_point_bits",
+            min(fixed_point_bits_min, fixed_point_bits_max),
+            max(fixed_point_bits_min, fixed_point_bits_max),
+        )
+        frac_hi = min(
+            max(fixed_point_frac_min, fixed_point_frac_max), fixed_point_bits - 1
+        )
+        frac_lo = min(fixed_point_frac_min, fixed_point_frac_max)
+        frac_lo = min(frac_lo, frac_hi)
+        fixed_point_frac_bits = trial.suggest_int(
+            "fixed_point_frac_bits", frac_lo, frac_hi
+        )
+        fixed_point_round_mode = trial.suggest_categorical(
+            "fixed_point_round_mode",
+            fixed_point_rounding_options or ["nearest", "floor"],
+        )
+        fixed_point_use_ste = trial.suggest_categorical(
+            "fixed_point_use_ste", [True, False]
+        )
+    else:
+        fixed_point_bits = ExperimentConfig.fixed_point_bits
+        fixed_point_frac_bits = ExperimentConfig.fixed_point_frac_bits
+        fixed_point_round_mode = ExperimentConfig.fixed_point_round_mode
+        fixed_point_use_ste = ExperimentConfig.fixed_point_use_ste
 
     return ExperimentConfig(
         n_hidden=trial.suggest_int("n_hidden", 96, 320, step=32),
@@ -168,6 +243,10 @@ def build_config(
         warmup_ratio=trial.suggest_float("warmup_ratio", 0.0, 0.2),
         final_lr_frac=trial.suggest_float("final_lr_frac", 0.0, 0.2),
         weight_mode=weight_mode,
+        fixed_point_bits=fixed_point_bits,
+        fixed_point_frac_bits=fixed_point_frac_bits,
+        fixed_point_round_mode=fixed_point_round_mode,
+        fixed_point_use_ste=fixed_point_use_ste,
         ternary_threshold=ternary_threshold,
         ternary_scale_mode=ternary_scale_mode,
         ternary_use_ste=ternary_use_ste,
@@ -454,16 +533,27 @@ def main() -> None:
     )
 
     def objective(trial: optuna.trial.Trial) -> float:
+        fixed_round_options = [
+            x.strip()
+            for x in args.fixed_point_rounding_options.split(",")
+            if x.strip()
+        ]
         cfg = build_config(
             trial,
             args.time_budget_s,
             ternary_search=args.ternary_search,
+            fixed_point_search=args.fixed_point_search,
+            fixed_point_bits_min=args.fixed_point_bits_min,
+            fixed_point_bits_max=args.fixed_point_bits_max,
+            fixed_point_frac_min=args.fixed_point_frac_min,
+            fixed_point_frac_max=args.fixed_point_frac_max,
+            fixed_point_rounding_options=fixed_round_options,
             ternary_threshold_min=args.ternary_threshold_min,
             ternary_threshold_max=args.ternary_threshold_max,
         )
-        _, metrics = train_once(cfg)
+        metrics, _ = train_once(cfg)
 
-        if args.ternary_search and args.run_verilator:
+        if cfg.weight_mode == "ternary" and args.run_verilator:
             if args.verilator_mode == "lint":
                 verilator = run_verilator_lint_step(
                     trial,

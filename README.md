@@ -24,7 +24,7 @@ uv run train.py
 
 Then point Claude Code or another coding agent at `program.md` and let it run the loop.
 
-## Ternary SNN Search + Verilator
+## Fixed-Point + Ternary Search + Verilator
 
 For SHD SNN experiments, ternary training/search is now available in the existing scripts.
 
@@ -42,6 +42,21 @@ uv run search_snn_optuna.py \
 	--ternary-search \
 	--ternary-threshold-min 0.02 \
 	--ternary-threshold-max 0.35
+
+# fixed-point architecture + hyperparameter search
+uv run search_snn_optuna.py \
+	--trials 20 \
+	--fixed-point-search \
+	--fixed-point-bits-min 4 \
+	--fixed-point-bits-max 12 \
+	--fixed-point-frac-min 1 \
+	--fixed-point-frac-max 8
+
+# coupled search space: trial chooses fixed or ternary mode
+uv run search_snn_optuna.py \
+	--trials 30 \
+	--fixed-point-search \
+	--ternary-search
 
 # ternary search with a post-trial Verilator step
 # placeholders: {trial_dir}, {trial_number}
@@ -74,6 +89,29 @@ uv run search_snn_optuna.py \
 ```
 
 Each Verilator run writes trial context metadata to `experiments/verilator/trial_XXXX/trial_context.json` before executing the Verilator command.
+
+### Orchestrated pipeline (Dagster + DVC)
+
+```bash
+# full staged pipeline: fixed -> ternary -> verilator (Dagster orchestration)
+uv run run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage full
+
+# DVC staged execution (local cache tracking, no remote required)
+dvc repro snn_fixed_search
+dvc repro snn_ternary_search
+dvc repro snn_ternary_verilator
+
+# One-shot DVC full pipeline
+dvc repro snn_quant_full_dag
+```
+
+Pipeline artifacts and structured logs are written under:
+
+- `experiments/snn_fixed_trials.jsonl`
+- `experiments/snn_ternary_trials.jsonl`
+- `experiments/snn_ternary_verilator_trials.jsonl`
+- `experiments/quant_pipeline/stage_runs.jsonl`
+- `experiments/quant_pipeline/pipeline_runs.jsonl`
 
 ## 3D Render
 

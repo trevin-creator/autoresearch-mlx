@@ -57,6 +57,10 @@ class ExperimentConfig:
     sparsity_reg_weight: float = 0.0
     final_eval_batch_size: int = 256
     weight_mode: str = "float"
+    fixed_point_bits: int = 8
+    fixed_point_frac_bits: int = 4
+    fixed_point_round_mode: str = "nearest"
+    fixed_point_use_ste: bool = True
     ternary_threshold: float = 0.08
     ternary_scale_mode: str = "mean_abs"
     ternary_use_ste: bool = True
@@ -82,6 +86,10 @@ class ShdSnn(nn.Module):
         self.n_hidden = n_hidden
         self.n_layers = n_layers
         self.weight_mode = cfg.weight_mode
+        self.fixed_point_bits = cfg.fixed_point_bits
+        self.fixed_point_frac_bits = cfg.fixed_point_frac_bits
+        self.fixed_point_round_mode = cfg.fixed_point_round_mode
+        self.fixed_point_use_ste = cfg.fixed_point_use_ste
         self.ternary_threshold = cfg.ternary_threshold
         self.ternary_scale_mode = cfg.ternary_scale_mode
         self.ternary_use_ste = cfg.ternary_use_ste
@@ -113,10 +121,38 @@ class ShdSnn(nn.Module):
             return w + mx.stop_gradient(ternary - w)
         return ternary
 
+    def _fixed_point_weight(self, w: mx.array) -> mx.array:
+        bits = max(2, int(self.fixed_point_bits))
+        frac_bits = max(0, min(int(self.fixed_point_frac_bits), bits - 1))
+
+        scale = float(2**frac_bits)
+        max_int = float((2 ** (bits - 1)) - 1)
+        min_int = float(-(2 ** (bits - 1)))
+
+        w_scaled = w * scale
+        if self.fixed_point_round_mode == "floor":
+            w_q_int = mx.floor(w_scaled)
+        else:
+            w_q_int = mx.round(w_scaled)
+
+        w_q_int = mx.clip(w_q_int, min_int, max_int)
+        w_q = w_q_int / scale
+
+        if self.fixed_point_use_ste and hasattr(mx, "stop_gradient"):
+            return w + mx.stop_gradient(w_q - w)
+        return w_q
+
     def _linear(self, x: mx.array, linear: nn.Linear) -> mx.array:
-        if self.weight_mode != "ternary":
+        if self.weight_mode == "float":
             return linear(x)
-        q_weight = self._ternary_weight(linear.weight)
+
+        if self.weight_mode == "ternary":
+            q_weight = self._ternary_weight(linear.weight)
+        elif self.weight_mode == "fixed":
+            q_weight = self._fixed_point_weight(linear.weight)
+        else:
+            return linear(x)
+
         return x @ q_weight.T
 
     def __call__(self, x_seq: mx.array) -> mx.array:
@@ -337,8 +373,33 @@ def parse_args() -> argparse.Namespace:
         "--weight-mode",
         type=str,
         default=ExperimentConfig.weight_mode,
-        choices=["float", "ternary"],
-        help="Weight path: float baseline or ternary projected weights.",
+        choices=["float", "fixed", "ternary"],
+        help="Weight path: float baseline, fixed-point, or ternary projection.",
+    )
+    parser.add_argument(
+        "--fixed-point-bits",
+        type=int,
+        default=ExperimentConfig.fixed_point_bits,
+        help="Total signed fixed-point bit-width (including sign bit).",
+    )
+    parser.add_argument(
+        "--fixed-point-frac-bits",
+        type=int,
+        default=ExperimentConfig.fixed_point_frac_bits,
+        help="Fractional bits for fixed-point quantization.",
+    )
+    parser.add_argument(
+        "--fixed-point-round-mode",
+        type=str,
+        default=ExperimentConfig.fixed_point_round_mode,
+        choices=["nearest", "floor"],
+        help="Rounding mode for fixed-point projection.",
+    )
+    parser.add_argument(
+        "--fixed-point-use-ste",
+        action=argparse.BooleanOptionalAction,
+        default=ExperimentConfig.fixed_point_use_ste,
+        help="Use straight-through estimator for fixed-point projection gradients.",
     )
     parser.add_argument(
         "--ternary-threshold",
@@ -391,6 +452,10 @@ def main() -> None:
         warmup_ratio=args.warmup_ratio,
         final_lr_frac=args.final_lr_frac,
         weight_mode=args.weight_mode,
+        fixed_point_bits=args.fixed_point_bits,
+        fixed_point_frac_bits=args.fixed_point_frac_bits,
+        fixed_point_round_mode=args.fixed_point_round_mode,
+        fixed_point_use_ste=args.fixed_point_use_ste,
         ternary_threshold=args.ternary_threshold,
         ternary_scale_mode=args.ternary_scale_mode,
         ternary_use_ste=args.ternary_use_ste,

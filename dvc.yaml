@@ -1,0 +1,49 @@
+vars:
+  - params_snn_quant.yaml
+
+stages:
+  snn_fixed_search:
+    cmd: python run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage fixed --skip-prereqs
+    params:
+      - fixed_search
+    outs:
+      - experiments/snn_fixed_trials.jsonl
+      - experiments/quant_pipeline/stage_runs.jsonl
+      - experiments/quant_pipeline/pipeline_runs.jsonl
+
+  snn_ternary_search:
+    cmd: python run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage ternary --skip-prereqs
+    deps:
+      - experiments/snn_fixed_trials.jsonl
+    params:
+      - ternary_search
+    outs:
+      - experiments/snn_ternary_trials.jsonl
+      - experiments/quant_pipeline/stage_runs.jsonl
+      - experiments/quant_pipeline/pipeline_runs.jsonl
+
+  snn_ternary_verilator:
+    cmd: python run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage verilator --skip-prereqs
+    deps:
+      - experiments/snn_ternary_trials.jsonl
+    params:
+      - verilator_stage
+    outs:
+      - experiments/snn_ternary_verilator_trials.jsonl
+      - experiments/verilator/
+      - experiments/quant_pipeline/stage_runs.jsonl
+      - experiments/quant_pipeline/pipeline_runs.jsonl
+
+  snn_quant_full_dag:
+    cmd: python run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage full
+    params:
+      - fixed_search
+      - ternary_search
+      - verilator_stage
+    outs:
+      - experiments/snn_fixed_trials.jsonl
+      - experiments/snn_ternary_trials.jsonl
+      - experiments/snn_ternary_verilator_trials.jsonl
+      - experiments/verilator/
+      - experiments/quant_pipeline/stage_runs.jsonl
+      - experiments/quant_pipeline/pipeline_runs.jsonl
