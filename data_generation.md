@@ -22,7 +22,8 @@ train_vision.py / train_snn.py (MLX GPU via spyx_mlx)
 The event model follows the ESIM principle: tight coupling between the
 renderer and a per-pixel log-intensity threshold emulator with per-pixel
 threshold mismatch, refractory period, timestamp interpolation, photoreceptor
-low-pass filtering, and stochastic background events (leak and shot noise).
+low-pass filtering, photoreceptor temporal noise, and stochastic background
+events (leak and shot noise).
 
 ## Relationship to the project
 
@@ -46,8 +47,12 @@ offline step that produces standard NumPy files loadable on any platform.
 | Threshold mismatch | Gaussian σ 0.02 | Per-pixel variation |
 | Refractory period | 200 µs | Prevents event avalanche |
 | Photoreceptor tau | 5 ms | First-order low-pass in log-intensity domain |
+| Photoreceptor noise std | 0.0 | Additive temporal noise in log domain |
 | Leak rate | 0.5 Hz/pixel | Background ON activity process |
-| Shot noise rate | 0.5 Hz/pixel | Random ON/OFF stochastic events |
+| Shot noise rate | 0.5 Hz/pixel | Random ON/OFF events, strongest in dark regions |
+| Noise-rate FPN | 0.2 decades | Log-normal pixel-wise spread for leak/shot rates |
+| Event bandwidth cap | disabled | Optional max event rate per pixel |
+| Timestamp jitter | disabled | Optional Gaussian timing jitter in microseconds |
 | Micro-step dt | 1 ms | Higher rate = more fidelity, more events |
 | Event format | `(t_us, x, y, polarity)` | Standard int64 tuple per event |
 | Timestamp interpolation | Enabled | Sub-step event timing via linear interp |
@@ -138,11 +143,10 @@ used by `ExperimentConfig` in `train_snn.py`, with argparse CLI overrides.
 
 1. **Fidelity is limited by sim_dt** — renders once per step. Adaptive
    sub-stepping when |Δlog I| is large would improve realism.
-2. **Noise model is global-rate** — leak/shot are currently uniform per
-  pixel. Adding intensity-dependent and temperature-dependent noise would
-  better match real sensors.
-3. **No hot/dead pixel map** — fixed defective-pixel maps are not yet
-  modeled.
+2. **No explicit hot/dead pixel map** — fixed defective-pixel maps are not
+  yet modeled.
+3. **Noise is phenomenological** — leak/shot/photoreceptor noise are tuned
+  for realism but not fitted to a specific hardware calibration profile.
 4. **Event loop is Python** — the per-pixel iteration is not vectorized.
    For large resolutions or long sequences, a Cython or NumPy-vectorized
    version would speed things up significantly.

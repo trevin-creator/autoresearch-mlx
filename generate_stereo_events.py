@@ -57,6 +57,12 @@ def parse_args() -> argparse.Namespace:
         help="Photoreceptor low-pass time constant in milliseconds",
     )
     p.add_argument(
+        "--photoreceptor-noise-std",
+        type=float,
+        default=0.0,
+        help="Std-dev of additive temporal noise in log-intensity domain",
+    )
+    p.add_argument(
         "--leak-rate-hz",
         type=float,
         default=0.5,
@@ -67,6 +73,24 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.5,
         help="Per-pixel shot-noise activity rate in Hz",
+    )
+    p.add_argument(
+        "--noise-rate-cov-decades",
+        type=float,
+        default=0.2,
+        help="Log-normal per-pixel FPN spread for leak/shot rates (decades)",
+    )
+    p.add_argument(
+        "--max-event-rate-hz",
+        type=float,
+        default=0.0,
+        help="Per-pixel bandwidth cap in Hz (0 disables cap)",
+    )
+    p.add_argument(
+        "--timestamp-jitter-us",
+        type=float,
+        default=0.0,
+        help="Gaussian timestamp jitter std-dev in microseconds",
     )
 
     # Simulation
@@ -101,8 +125,12 @@ def main() -> None:
         threshold_sigma=args.threshold_sigma,
         refractory_us=args.refractory_us,
         photoreceptor_tau_ms=args.photoreceptor_tau_ms,
+        photoreceptor_noise_std=args.photoreceptor_noise_std,
         leak_rate_hz=args.leak_rate_hz,
         shot_noise_rate_hz=args.shot_noise_rate_hz,
+        noise_rate_cov_decades=args.noise_rate_cov_decades,
+        max_event_rate_hz=args.max_event_rate_hz,
+        timestamp_jitter_us=args.timestamp_jitter_us,
     )
     sim_cfg = SimConfig(
         sim_dt=args.dt,

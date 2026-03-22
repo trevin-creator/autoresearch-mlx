@@ -29,8 +29,12 @@ class EventConfig:
     eps: float = 1e-3
     use_timestamp_interpolation: bool = True
     photoreceptor_tau_ms: float = 5.0
+    photoreceptor_noise_std: float = 0.0
     leak_rate_hz: float = 0.5
     shot_noise_rate_hz: float = 0.5
+    noise_rate_cov_decades: float = 0.2
+    max_event_rate_hz: float = 0.0
+    timestamp_jitter_us: float = 0.0
 
 
 @dataclass(frozen=True)
