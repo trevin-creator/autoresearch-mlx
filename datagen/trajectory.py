@@ -26,6 +26,9 @@ class ScriptedRigTrajectory:
         vertical_freq: float = 0.17,
         roll_amplitude_deg: float = 6.0,
         roll_freq: float = 0.23,
+        lateral_clearance: float = 0.75,
+        vertical_clearance: float = 0.40,
+        obstacle_influence_sigma: float = 1.1,
     ):
         self.speed = speed_mps
         self.alt = altitude
@@ -35,6 +38,18 @@ class ScriptedRigTrajectory:
         self.vert_freq = vertical_freq
         self.roll_amp = math.radians(roll_amplitude_deg)
         self.roll_freq = roll_freq
+        self.lat_clearance = lateral_clearance
+        self.vert_clearance = vertical_clearance
+        self.obs_sigma = obstacle_influence_sigma
+
+        # (x, y, radius-ish extent, top_z, preferred_side)
+        self.obstacles = [
+            (5.0, 0.0, 0.9, 1.0, 1.0),
+            (8.0, 1.2, 1.2, 1.5, -1.0),
+            (12.0, -1.0, 1.5, 2.0, 1.0),
+            (15.0, 0.8, 0.8, 1.5, -1.0),
+            (18.0, -0.5, 0.9, 1.8, 1.0),
+        ]
 
     @staticmethod
     def _rotate_about_axis(v: np.ndarray, axis: np.ndarray, angle: float) -> np.ndarray:
@@ -44,28 +59,37 @@ class ScriptedRigTrajectory:
         sa = math.sin(angle)
         return v * ca + np.cross(axis_n, v) * sa + axis_n * np.dot(axis_n, v) * (1 - ca)
 
-    def pose(self, t: float) -> tuple[np.ndarray, np.ndarray]:
-        """Return (position, rotation_matrix) of the rig centre at time t."""
+    def _position(self, t: float) -> np.ndarray:
+        """Obstacle-aware rig centre position at time t."""
         omega_lat = 2.0 * math.pi * self.lat_freq
         omega_vert = 2.0 * math.pi * self.vert_freq
 
-        # Slight speed wobble + dual-frequency lateral weave + vertical undulation.
+        # Nominal forward motion with smooth weave and vertical bobbing.
         px = self.speed * t + 0.35 * math.sin(2.0 * math.pi * 0.11 * t)
         py = self.lat_amp * math.sin(omega_lat * t) + 0.12 * math.sin(
             2.0 * omega_lat * t + 0.7
         )
         pz = self.alt + self.vert_amp * math.sin(omega_vert * t + 0.35)
-        pos = np.array([px, py, pz], dtype=np.float64)
 
-        vx = self.speed + 0.35 * 2.0 * math.pi * 0.11 * math.cos(
-            2.0 * math.pi * 0.11 * t
-        )
-        vy = self.lat_amp * omega_lat * math.cos(
-            omega_lat * t
-        ) + 0.24 * omega_lat * math.cos(2.0 * omega_lat * t + 0.7)
-        vz = self.vert_amp * omega_vert * math.cos(omega_vert * t + 0.35)
+        # Obstacle-aware slalom and climb profile.
+        for ox, oy, extent, top_z, side in self.obstacles:
+            dx = px - ox
+            influence = math.exp(-0.5 * (dx / self.obs_sigma) ** 2)
 
-        forward = np.array([vx, vy, vz], dtype=np.float64)
+            target_y = oy + side * (extent + self.lat_clearance)
+            py += 0.85 * influence * (target_y - py)
+
+            min_z = top_z + self.vert_clearance
+            if pz < min_z:
+                pz += 0.90 * influence * (min_z - pz)
+
+        return np.array([px, py, pz], dtype=np.float64)
+
+    def pose(self, t: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return (position, rotation_matrix) of the rig centre at time t."""
+        pos = self._position(t)
+        pos_next = self._position(t + 1e-3)
+        forward = pos_next - pos
         forward = forward / (np.linalg.norm(forward) + 1e-12)
 
         up_world = np.array([0.0, 0.0, 1.0], dtype=np.float64)
