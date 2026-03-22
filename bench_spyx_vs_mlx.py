@@ -60,14 +60,69 @@ def _spyx_transformed(neuron: str, hidden: int):
         klass = spyx_nn.IF
         kwargs = {"threshold": 1.0}
     elif neuron == "LIF":
-        klass = spyx_nn.LIF
-        kwargs = {"beta": 0.9, "threshold": 1.0}
+        threshold = 1.0
+
+        def model(xs, s0):
+            beta = hk.get_parameter("beta", [], init=hk.initializers.Constant(0.9))
+            beta = jnp.clip(beta, 0.0, 1.0)
+            spike_fn = spyx_axn.superspike()
+
+            def step_fn(v, x_t):
+                spikes = spike_fn(v - threshold)
+                v = beta * v + x_t - spikes * threshold
+                return v, spikes
+
+            sf, ys = jax.lax.scan(step_fn, s0, xs)
+            return ys, sf
+
+        return hk.without_apply_rng(hk.transform(model))
     elif neuron == "ALIF":
-        klass = spyx_nn.ALIF
-        kwargs = {"beta": 0.9, "gamma": 0.9, "threshold": 1.0}
+        threshold = 1.0
+
+        def model(xs, s0):
+            beta = hk.get_parameter("beta", [], init=hk.initializers.Constant(0.9))
+            gamma = hk.get_parameter("gamma", [], init=hk.initializers.Constant(0.9))
+            beta = jnp.clip(beta, 0.0, 1.0)
+            gamma = jnp.clip(gamma, 0.0, 1.0)
+            spike_fn = spyx_axn.superspike()
+
+            def step_fn(vt, x_t):
+                v, t = jnp.split(vt, 2, axis=-1)
+                thresh = threshold + t
+                spikes = spike_fn(v - thresh)
+                v = beta * v + x_t - spikes * thresh
+                t = gamma * t + (1.0 - gamma) * spikes
+                vt = jnp.concatenate([v, t], axis=-1)
+                return vt, spikes
+
+            sf, ys = jax.lax.scan(step_fn, s0, xs)
+            return ys, sf
+
+        return hk.without_apply_rng(hk.transform(model))
     elif neuron == "CuBaLIF":
-        klass = spyx_nn.CuBaLIF
-        kwargs = {"alpha": 0.8, "beta": 0.9, "threshold": 1.0}
+        threshold = 1.0
+
+        def model(xs, s0):
+            alpha = hk.get_parameter("alpha", [], init=hk.initializers.Constant(0.8))
+            beta = hk.get_parameter("beta", [], init=hk.initializers.Constant(0.9))
+            alpha = jnp.clip(alpha, 0.0, 1.0)
+            beta = jnp.clip(beta, 0.0, 1.0)
+            spike_fn = spyx_axn.superspike()
+
+            def step_fn(vi, x_t):
+                v, i = jnp.split(vi, 2, axis=-1)
+                spikes = spike_fn(v - threshold)
+                reset = spikes * threshold
+                v = v - reset
+                i = alpha * i + x_t
+                v = beta * v + i - reset
+                vi = jnp.concatenate([v, i], axis=-1)
+                return vi, spikes
+
+            sf, ys = jax.lax.scan(step_fn, s0, xs)
+            return ys, sf
+
+        return hk.without_apply_rng(hk.transform(model))
     elif neuron == "RLIF":
         # Equivalent to spyx.nn.RLIF, but hoists parameters outside scan to
         # avoid tracer leaks in benchmark-only JAX transforms.
