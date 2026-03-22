@@ -44,7 +44,7 @@ T_STEPS_RUN = T_STEPS  # time steps (must match prepare_snn.T_STEPS or override)
 BATCH_SIZE = 48
 LEARNING_RATE = 1e-3
 WEIGHT_DECAY = 1e-4
-LABEL_SMOOTHING = 0.3
+LABEL_SMOOTHING = 0.1
 
 # Learning rate schedule: cosine decay with linear warmup
 WARMUP_RATIO = 0.05
