@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import mlx.core as mx
 
 import spyx.nn as spyx_nn
+import spyx.axn as spyx_axn
 from spyx_mlx.nn import ALIF as MlxALIF
 from spyx_mlx.nn import CuBaLIF as MlxCuBaLIF
 from spyx_mlx.nn import IF as MlxIF
@@ -68,8 +69,30 @@ def _spyx_transformed(neuron: str, hidden: int):
         klass = spyx_nn.CuBaLIF
         kwargs = {"alpha": 0.8, "beta": 0.9, "threshold": 1.0}
     elif neuron == "RLIF":
-        klass = spyx_nn.RLIF
-        kwargs = {"beta": 0.9, "threshold": 1.0}
+        # Equivalent to spyx.nn.RLIF, but hoists parameters outside scan to
+        # avoid tracer leaks in benchmark-only JAX transforms.
+        threshold = 1.0
+
+        def model(xs, s0):
+            recurrent = hk.get_parameter(
+                "w",
+                hidden_shape * 2,
+                init=hk.initializers.TruncatedNormal(),
+            )
+            beta = hk.get_parameter("beta", [], init=hk.initializers.Constant(0.9))
+            beta = jnp.clip(beta, 0.0, 1.0)
+            spike_fn = spyx_axn.superspike()
+
+            def step_fn(v, x_t):
+                spikes = spike_fn(v - threshold)
+                feedback = spikes @ recurrent
+                v = beta * v + x_t + feedback - spikes * threshold
+                return v, spikes
+
+            sf, ys = jax.lax.scan(step_fn, s0, xs)
+            return ys, sf
+
+        return hk.without_apply_rng(hk.transform(model))
     else:
         raise ValueError(f"Unsupported neuron: {neuron}")
 
@@ -123,10 +146,22 @@ def _time_jax(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
     transformed = _spyx_transformed(neuron, hidden)
     params = transformed.init(jax.random.PRNGKey(0), xs, s0)
     fn = jax.jit(transformed.apply)
+    use_jit = True
 
-    y, s = fn(params, xs, s0)
-    jax.block_until_ready(y)
-    jax.block_until_ready(s)
+    try:
+        y, s = fn(params, xs, s0)
+        jax.block_until_ready(y)
+        jax.block_until_ready(s)
+    except Exception as exc:  # noqa: BLE001
+        err = str(exc)
+        if jax.default_backend().lower() == "metal" and "default_memory_space" in err:
+            use_jit = False
+            fn = transformed.apply
+            y, s = fn(params, xs, s0)
+            jax.block_until_ready(y)
+            jax.block_until_ready(s)
+        else:
+            raise
 
     times = []
     for _ in range(repeats):
@@ -178,7 +213,15 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark spyx (JAX) vs spyx_mlx (MLX)")
     parser.add_argument("--repeats", type=int, default=8)
     parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
+    parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
+    parser.add_argument("--skip-jax", action="store_true")
+    parser.add_argument("--skip-mlx", action="store_true")
     args = parser.parse_args()
+
+    if args.mlx_device == "cpu":
+        mx.set_default_device(mx.cpu)
+    elif args.mlx_device == "gpu":
+        mx.set_default_device(mx.gpu)
 
     configs = [
         ("small", 32, 128, 128),
@@ -186,6 +229,8 @@ def main():
         ("large", 96, 384, 128),
     ]
     neurons = ["IF", "LIF", "ALIF", "CuBaLIF", "RLIF"]
+    jax_backend_name = f"spyx-jax-{jax.default_backend().lower()}"
+    mlx_backend_name = "spyx-mlx-gpu" if "gpu" in str(mx.default_device()).lower() else "spyx-mlx-cpu"
 
     print(f"JAX backend: {jax.default_backend()}")
     print(f"MLX default device: {mx.default_device()}")
@@ -195,22 +240,24 @@ def main():
     for neuron in neurons:
         for cfg_name, batch, hidden, steps in configs:
             try:
-                jax_times = _time_jax(neuron, batch, hidden, steps, args.repeats)
-                rows.append(_summary(neuron, cfg_name, batch, hidden, steps, "spyx-jax", jax_times))
+                if not args.skip_jax:
+                    jax_times = _time_jax(neuron, batch, hidden, steps, args.repeats)
+                    rows.append(_summary(neuron, cfg_name, batch, hidden, steps, jax_backend_name, jax_times))
             except Exception as exc:  # noqa: BLE001
                 failures.append({
-                    "backend": "spyx-jax",
+                    "backend": jax_backend_name,
                     "neuron": neuron,
                     "config": cfg_name,
                     "error": f"{type(exc).__name__}: {exc}",
                 })
 
             try:
-                mlx_times = _time_mlx(neuron, batch, hidden, steps, args.repeats)
-                rows.append(_summary(neuron, cfg_name, batch, hidden, steps, "spyx-mlx", mlx_times))
+                if not args.skip_mlx:
+                    mlx_times = _time_mlx(neuron, batch, hidden, steps, args.repeats)
+                    rows.append(_summary(neuron, cfg_name, batch, hidden, steps, mlx_backend_name, mlx_times))
             except Exception as exc:  # noqa: BLE001
                 failures.append({
-                    "backend": "spyx-mlx",
+                    "backend": mlx_backend_name,
                     "neuron": neuron,
                     "config": cfg_name,
                     "error": f"{type(exc).__name__}: {exc}",
@@ -219,17 +266,25 @@ def main():
             print(f"done: {neuron} {cfg_name}")
 
     payload = {
+        "run_config": {
+            "repeats": args.repeats,
+            "mlx_device": args.mlx_device,
+            "skip_jax": args.skip_jax,
+            "skip_mlx": args.skip_mlx,
+            "jax_backend": jax.default_backend(),
+            "mlx_default_device": str(mx.default_device()),
+        },
         "results": [asdict(r) for r in rows],
         "failures": failures,
     }
     args.json.write_text(json.dumps(payload, indent=2))
 
     print("\nSummary (ms/step, lower is better):")
-    print("neuron\tconfig\tspyx-jax\tspyx-mlx\tspeedup(mlx_vs_jax)")
+    print(f"neuron\tconfig\t{jax_backend_name}\t{mlx_backend_name}\tspeedup(mlx_vs_jax)")
     for neuron in neurons:
         for cfg_name, batch, hidden, steps in configs:
-            j = next((r for r in rows if r.neuron == neuron and r.config == cfg_name and r.backend == "spyx-jax"), None)
-            m = next((r for r in rows if r.neuron == neuron and r.config == cfg_name and r.backend == "spyx-mlx"), None)
+            j = next((r for r in rows if r.neuron == neuron and r.config == cfg_name and r.backend == jax_backend_name), None)
+            m = next((r for r in rows if r.neuron == neuron and r.config == cfg_name and r.backend == mlx_backend_name), None)
             if j is None or m is None:
                 print(f"{neuron}\t{cfg_name}\tNA\tNA\tNA")
                 continue

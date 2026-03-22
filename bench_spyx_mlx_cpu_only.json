@@ -1,0 +1,193 @@
+{
+  "run_config": {
+    "repeats": 10,
+    "mlx_device": "cpu",
+    "skip_jax": true,
+    "skip_mlx": false,
+    "jax_backend": "cpu",
+    "mlx_default_device": "Device(cpu, 0)"
+  },
+  "results": [
+    {
+      "neuron": "IF",
+      "config": "small",
+      "batch": 32,
+      "hidden": 128,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.0017412875895388424,
+      "std_seconds": 0.0004281893376678293,
+      "steps_per_second": 73508.82230424622,
+      "ms_per_step": 0.013603809293272207
+    },
+    {
+      "neuron": "IF",
+      "config": "medium",
+      "batch": 64,
+      "hidden": 256,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.0030575417971704156,
+      "std_seconds": 0.000457627788793942,
+      "steps_per_second": 41863.695900561965,
+      "ms_per_step": 0.02388704529039387
+    },
+    {
+      "neuron": "IF",
+      "config": "large",
+      "batch": 96,
+      "hidden": 384,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.0053107833955436945,
+      "std_seconds": 0.0002515996923206965,
+      "steps_per_second": 24101.905588430785,
+      "ms_per_step": 0.04149049527768511
+    },
+    {
+      "neuron": "LIF",
+      "config": "small",
+      "batch": 32,
+      "hidden": 128,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.0015541626955382526,
+      "std_seconds": 0.00027842725308467765,
+      "steps_per_second": 82359.4597705035,
+      "ms_per_step": 0.012141896058892598
+    },
+    {
+      "neuron": "LIF",
+      "config": "medium",
+      "batch": 64,
+      "hidden": 256,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.002919008396565914,
+      "std_seconds": 0.00035542349571551573,
+      "steps_per_second": 43850.50764176849,
+      "ms_per_step": 0.022804753098171204
+    },
+    {
+      "neuron": "LIF",
+      "config": "large",
+      "batch": 96,
+      "hidden": 384,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.005332966602873057,
+      "std_seconds": 0.0002816577474882523,
+      "steps_per_second": 24001.650400556024,
+      "ms_per_step": 0.04166380158494576
+    },
+    {
+      "neuron": "ALIF",
+      "config": "small",
+      "batch": 32,
+      "hidden": 128,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.004278599697863683,
+      "std_seconds": 0.00027143808863041755,
+      "steps_per_second": 29916.3298833286,
+      "ms_per_step": 0.033426560139560024
+    },
+    {
+      "neuron": "ALIF",
+      "config": "medium",
+      "batch": 64,
+      "hidden": 256,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.00800757909892127,
+      "std_seconds": 0.00025110387595994214,
+      "steps_per_second": 15984.856149250321,
+      "ms_per_step": 0.06255921171032242
+    },
+    {
+      "neuron": "ALIF",
+      "config": "large",
+      "batch": 96,
+      "hidden": 384,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.012639520992524921,
+      "std_seconds": 0.0003585055003309827,
+      "steps_per_second": 10126.966051616977,
+      "ms_per_step": 0.09874625775410095
+    },
+    {
+      "neuron": "CuBaLIF",
+      "config": "small",
+      "batch": 32,
+      "hidden": 128,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.002900075004436076,
+      "std_seconds": 0.0003912718599739095,
+      "steps_per_second": 44136.78949827362,
+      "ms_per_step": 0.02265683597215684
+    },
+    {
+      "neuron": "CuBaLIF",
+      "config": "medium",
+      "batch": 64,
+      "hidden": 256,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.00639449151349254,
+      "std_seconds": 0.000240079519257073,
+      "steps_per_second": 20017.22884922386,
+      "ms_per_step": 0.049956964949160465
+    },
+    {
+      "neuron": "CuBaLIF",
+      "config": "large",
+      "batch": 96,
+      "hidden": 384,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.01120349151897244,
+      "std_seconds": 0.0003660274669028454,
+      "steps_per_second": 11425.009764432782,
+      "ms_per_step": 0.0875272774919722
+    },
+    {
+      "neuron": "RLIF",
+      "config": "small",
+      "batch": 32,
+      "hidden": 128,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.0029404583969153465,
+      "std_seconds": 0.0002813072312186061,
+      "steps_per_second": 43530.62778724464,
+      "ms_per_step": 0.022972331225901144
+    },
+    {
+      "neuron": "RLIF",
+      "config": "medium",
+      "batch": 64,
+      "hidden": 256,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.0049846209993120285,
+      "std_seconds": 0.0003468950648287655,
+      "steps_per_second": 25678.98342073879,
+      "ms_per_step": 0.03894235155712522
+    },
+    {
+      "neuron": "RLIF",
+      "config": "large",
+      "batch": 96,
+      "hidden": 384,
+      "steps": 128,
+      "backend": "spyx-mlx-cpu",
+      "mean_seconds": 0.00974721679231152,
+      "std_seconds": 0.0001431451516534697,
+      "steps_per_second": 13131.953738934459,
+      "ms_per_step": 0.07615013118993375
+    }
+  ],
+  "failures": []
+}
