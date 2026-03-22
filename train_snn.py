@@ -2,17 +2,24 @@
 Autoresearch SNN training script — SHD benchmark, Apple Silicon MLX.
 Usage: ~/.local/bin/uv run train_snn.py
 
-This is the file the autonomous agent modifies. Everything is fair game:
-architecture, optimizer, hyperparameters, neuron models, regularisation.
-
-The goal: maximise val_acc (higher is better) within the fixed time budget.
-Evaluation is done by prepare_snn.evaluate_accuracy() — do not modify that.
+This file now supports:
+- config-driven runs (CLI overrides)
+- structured JSONL experiment logging
+- reproducibility metadata capture
+- basic training anomaly checks
 """
 
+import argparse
+import dataclasses
 import gc
+import json
 import math
 import os
+import subprocess
 import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import mlx.core as mx
 import mlx.optimizers as optim
@@ -35,42 +42,22 @@ from spyx_mlx.nn import ALIF, LI
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 
-def assert_mlx_gpu_or_die() -> None:
-    device = mx.default_device()
-    if getattr(device, "type", None) != mx.gpu:
-        raise RuntimeError(
-            f"MLX GPU is required for training, but current default device is {device}."
-        )
-    print(f"Using MLX device: {device}")
-
-
-# ---------------------------------------------------------------------------
-# Hyperparameters — edit these freely
-# ---------------------------------------------------------------------------
-
-N_HIDDEN = 128  # neurons per hidden layer
-N_LAYERS = 2  # number of hidden spiking layers
-T_STEPS_RUN = T_STEPS  # time steps (must match prepare_snn.T_STEPS or override)
-BATCH_SIZE = 48
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 1e-4
-LABEL_SMOOTHING = 0.1
-
-# Learning rate schedule: cosine decay with linear warmup
-WARMUP_RATIO = 0.05
-FINAL_LR_FRAC = 0.0  # fraction of peak LR at end of training
-
-# Regularisation
-SILENCE_REG_WEIGHT = 0.0  # penalise silent neurons
-SPARSITY_REG_WEIGHT = 0.0  # penalise over-active neurons
-
-# Evaluation
-FINAL_EVAL_BATCH_SIZE = 256
-
-
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
+@dataclasses.dataclass(frozen=True)
+class ExperimentConfig:
+    n_hidden: int = 128
+    n_layers: int = 2
+    t_steps: int = T_STEPS
+    batch_size: int = 48
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
+    label_smoothing: float = 0.1
+    warmup_ratio: float = 0.05
+    final_lr_frac: float = 0.0
+    silence_reg_weight: float = 0.0
+    sparsity_reg_weight: float = 0.0
+    final_eval_batch_size: int = 256
+    seed: int = 42
+    time_budget_s: float = float(TIME_BUDGET)
 
 
 class ShdSnn(nn.Module):
@@ -79,42 +66,30 @@ class ShdSnn(nn.Module):
     Linear -> ALIF -> Linear -> ALIF -> Linear -> LI
     """
 
-    def __init__(self, n_input, n_hidden, n_layers, n_classes):
+    def __init__(self, n_input: int, n_hidden: int, n_layers: int, n_classes: int):
         super().__init__()
         self.n_hidden = n_hidden
         self.n_layers = n_layers
 
-        # Input projection
         self.input_proj = nn.Linear(n_input, n_hidden, bias=False)
-
-        # Hidden layers: alternating Linear + ALIF
         self.hidden_linears = [
             nn.Linear(n_hidden, n_hidden, bias=False) for _ in range(n_layers - 1)
         ]
         self.alif_layers = [ALIF(n_hidden) for _ in range(n_layers)]
 
-        # Output
         self.output_proj = nn.Linear(n_hidden, n_classes, bias=False)
         self.readout = LI(n_classes)
 
-    def __call__(self, x_seq):
-        """
-        Args:
-            x_seq: (T, batch, n_input) float32
-
-        Returns:
-            traces: (T, batch, n_classes) voltage traces for integral loss
-        """
+    def __call__(self, x_seq: mx.array) -> mx.array:
         n_t, n_b, _ = x_seq.shape
 
-        # Initialise states: ALIF state is (V, threshold_adaptation)
         alif_states = [alif.initial_state(n_b) for alif in self.alif_layers]
         li_state = self.readout.initial_state(n_b)
 
         traces = []
         for t in range(n_t):
-            x = x_seq[t]  # (n_b, n_input)
-            x = self.input_proj(x)  # (B, n_hidden)
+            x = x_seq[t]
+            x = self.input_proj(x)
             x, alif_states[0] = self.alif_layers[0](x, alif_states[0])
 
             for i, (linear, alif) in enumerate(
@@ -123,138 +98,238 @@ class ShdSnn(nn.Module):
                 x = linear(x)
                 x, alif_states[i + 1] = alif(x, alif_states[i + 1])
 
-            x = self.output_proj(x)  # (B, n_classes)
+            x = self.output_proj(x)
             v_out, li_state = self.readout(x, li_state)
             traces.append(v_out)
 
-        return mx.stack(traces, axis=0)  # (T, B, n_classes)
+        return mx.stack(traces, axis=0)
 
 
-# ---------------------------------------------------------------------------
-# LR schedule
-# ---------------------------------------------------------------------------
-
-
-def get_lr(step: int, total_steps: int, peak_lr: float) -> float:
-    progress = step / max(total_steps, 1)
-    if progress < WARMUP_RATIO:
-        return peak_lr * (progress / WARMUP_RATIO) if WARMUP_RATIO > 0 else peak_lr
-    t = (progress - WARMUP_RATIO) / (1.0 - WARMUP_RATIO)
-    cosine = 0.5 * (1.0 + math.cos(math.pi * t))
-    return peak_lr * (FINAL_LR_FRAC + (1.0 - FINAL_LR_FRAC) * cosine)
-
-
-# ---------------------------------------------------------------------------
-# Training
-# ---------------------------------------------------------------------------
-
-
-def loss_fn(model, x_seq, targets):
-    traces = model(x_seq)
-    return fn.integral_crossentropy(smoothing=LABEL_SMOOTHING)(traces, targets)
-
-
-t_start = time.time()
-mx.random.seed(42)
-assert_mlx_gpu_or_die()
-
-print("Loading SHD dataset ...")
-train_ds, test_ds = load_datasets(n_steps=T_STEPS_RUN)
-t_data = time.time()
-print(
-    f"Dataset loaded in {t_data - t_start:.1f}s | "
-    f"train: {train_ds.N} samples, test: {test_ds.N} samples"
-)
-
-model = ShdSnn(N_CHANNELS, N_HIDDEN, N_LAYERS, N_CLASSES)
-mx.eval(model.parameters())
-num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
-print(f"Parameters: {num_params / 1e6:.2f}M | hidden: {N_HIDDEN} x {N_LAYERS}")
-
-optimizer = optim.AdamW(learning_rate=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-loss_and_grad = nn.value_and_grad(model, loss_fn)
-
-
-rng = np.random.default_rng(42)
-
-total_training_time = 0.0
-step = 0
-t_compiled = None
-smooth_loss = 0.0
-
-steps_per_epoch = math.ceil(train_ds.N / BATCH_SIZE)
-estimated_total_steps = max(1000, steps_per_epoch * 20)
-
-print(f"Time budget: {TIME_BUDGET}s | batch: {BATCH_SIZE} | T: {T_STEPS_RUN}")
-
-while True:
-    for x_batch, y_batch in train_ds.batches(BATCH_SIZE, shuffle=True, rng=rng):
-        if step > 0 and total_training_time >= TIME_BUDGET:
-            break
-
-        t0 = time.time()
-
-        # x_batch: (B, T, C) -> transpose to (T, B, C)
-        x_seq = x_batch.transpose(1, 0, 2)
-
-        lr = get_lr(step, estimated_total_steps, LEARNING_RATE)
-        optimizer.learning_rate = lr
-
-        loss, grads = loss_and_grad(model, x_seq, y_batch)
-        optimizer.update(model, grads)
-        mx.eval(model.parameters(), optimizer.state, loss)
-
-        if t_compiled is None:
-            t_compiled = time.time()
-            print(f"Compiled in {t_compiled - t_data:.1f}s")
-
-        dt = time.time() - t0
-        total_training_time += dt
-
-        loss_f = float(loss.item())
-        ema = 0.95
-        smooth_loss = ema * smooth_loss + (1 - ema) * loss_f if step > 0 else loss_f
-        debiased = smooth_loss / (1 - ema ** (step + 1)) if step > 0 else loss_f
-
-        pct_done = 100 * min(total_training_time / TIME_BUDGET, 1.0)
-        remaining = max(0.0, TIME_BUDGET - total_training_time)
-        print(
-            f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased:.4f} | "
-            f"lr: {lr:.2e} | dt: {dt * 1000:.0f}ms | remaining: {remaining:.0f}s    ",
-            end="",
-            flush=True,
+def assert_mlx_gpu_or_die() -> str:
+    device = mx.default_device()
+    if getattr(device, "type", None) != mx.gpu:
+        raise RuntimeError(
+            f"MLX GPU is required for training, but current default device is {device}."
         )
+    print(f"Using MLX device: {device}")
+    return str(device)
 
-        if step == 0:
-            gc.collect()
-            gc.freeze()
-            gc.disable()
 
-        step += 1
-        if total_training_time >= TIME_BUDGET:
+def get_git_commit_short() -> str:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+        return out
+    except Exception:
+        return "unknown"
+
+
+def get_lr(step: int, total_steps: int, cfg: ExperimentConfig) -> float:
+    progress = step / max(total_steps, 1)
+    if progress < cfg.warmup_ratio:
+        if cfg.warmup_ratio <= 0:
+            return cfg.learning_rate
+        return cfg.learning_rate * (progress / cfg.warmup_ratio)
+    t = (progress - cfg.warmup_ratio) / max(1e-8, (1.0 - cfg.warmup_ratio))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * t))
+    return cfg.learning_rate * (cfg.final_lr_frac + (1.0 - cfg.final_lr_frac) * cosine)
+
+
+def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
+    t_start = time.time()
+    mx.random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    device_name = assert_mlx_gpu_or_die()
+
+    print("Loading SHD dataset ...")
+    train_ds, test_ds = load_datasets(n_steps=cfg.t_steps)
+    t_data = time.time()
+    print(
+        f"Dataset loaded in {t_data - t_start:.1f}s | "
+        f"train: {train_ds.N} samples, test: {test_ds.N} samples"
+    )
+
+    model = ShdSnn(N_CHANNELS, cfg.n_hidden, cfg.n_layers, N_CLASSES)
+    mx.eval(model.parameters())
+    num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
+    print(f"Parameters: {num_params / 1e6:.2f}M | hidden: {cfg.n_hidden} x {cfg.n_layers}")
+
+    optimizer = optim.AdamW(learning_rate=cfg.learning_rate, weight_decay=cfg.weight_decay)
+
+    def loss_fn(local_model: nn.Module, x_seq: mx.array, targets: mx.array) -> mx.array:
+        traces = local_model(x_seq)
+        return fn.integral_crossentropy(smoothing=cfg.label_smoothing)(traces, targets)
+
+    loss_and_grad = nn.value_and_grad(model, loss_fn)
+
+    rng = np.random.default_rng(cfg.seed)
+
+    total_training_time = 0.0
+    step = 0
+    t_compiled = None
+    smooth_loss = 0.0
+    step_dt_samples: list[float] = []
+
+    steps_per_epoch = max(1, math.ceil(train_ds.N / cfg.batch_size))
+    estimated_total_steps = max(1000, steps_per_epoch * 20)
+
+    print(
+        f"Time budget: {cfg.time_budget_s:.0f}s | batch: {cfg.batch_size} | T: {cfg.t_steps}"
+    )
+
+    while True:
+        for x_batch, y_batch in train_ds.batches(cfg.batch_size, shuffle=True, rng=rng):
+            if step > 0 and total_training_time >= cfg.time_budget_s:
+                break
+
+            t0 = time.time()
+            x_seq = x_batch.transpose(1, 0, 2)
+
+            lr = get_lr(step, estimated_total_steps, cfg)
+            optimizer.learning_rate = lr
+
+            loss, grads = loss_and_grad(model, x_seq, y_batch)
+            optimizer.update(model, grads)
+            mx.eval(model.parameters(), optimizer.state, loss)
+
+            if t_compiled is None:
+                t_compiled = time.time()
+                print(f"Compiled in {t_compiled - t_data:.1f}s")
+
+            dt = time.time() - t0
+            total_training_time += dt
+            step_dt_samples.append(dt)
+
+            if len(step_dt_samples) == 10:
+                avg_dt = sum(step_dt_samples) / len(step_dt_samples)
+                estimated_total_steps = max(1, int(cfg.time_budget_s / max(avg_dt, 1e-6)))
+
+            loss_f = float(loss.item())
+            if not math.isfinite(loss_f):
+                raise RuntimeError(f"Non-finite loss detected at step {step}: {loss_f}")
+
+            ema = 0.95
+            smooth_loss = ema * smooth_loss + (1 - ema) * loss_f if step > 0 else loss_f
+            debiased = smooth_loss / (1 - ema ** (step + 1)) if step > 0 else loss_f
+
+            pct_done = 100 * min(total_training_time / cfg.time_budget_s, 1.0)
+            remaining = max(0.0, cfg.time_budget_s - total_training_time)
+            print(
+                f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased:.4f} | "
+                f"lr: {lr:.2e} | dt: {dt * 1000:.0f}ms | remaining: {remaining:.0f}s    ",
+                end="",
+                flush=True,
+            )
+
+            if step == 0:
+                gc.collect()
+                gc.freeze()
+                gc.disable()
+
+            step += 1
+            if total_training_time >= cfg.time_budget_s:
+                break
+
+        if total_training_time >= cfg.time_budget_s:
             break
 
-    if total_training_time >= TIME_BUDGET:
-        break
+    print()
+    t_train = time.time()
+    print(f"Training completed in {t_train - t_data:.1f}s ({step} steps)")
 
-print()
-t_train = time.time()
-print(f"Training completed in {t_train - t_data:.1f}s ({step} steps)")
+    print("Starting final evaluation ...")
+    val_acc = evaluate_accuracy(model, test_ds, batch_size=cfg.final_eval_batch_size)
+    t_eval = time.time()
+    print(f"Eval completed in {t_eval - t_train:.1f}s")
 
-print("Starting final evaluation ...")
-val_acc = evaluate_accuracy(model, test_ds, batch_size=FINAL_EVAL_BATCH_SIZE)
-t_eval = time.time()
-print(f"Eval completed in {t_eval - t_train:.1f}s")
+    peak_vram_mb = get_peak_memory_mb()
 
-peak_vram_mb = get_peak_memory_mb()
+    result = {
+        "val_acc": float(val_acc),
+        "training_seconds": float(total_training_time),
+        "total_seconds": float(t_eval - t_start),
+        "peak_vram_mb": float(peak_vram_mb),
+        "num_steps": int(step),
+        "num_params_M": float(num_params / 1e6),
+        "device": device_name,
+    }
+    return result
 
-print("---")
-print(f"val_acc:          {val_acc:.6f}")
-print(f"training_seconds: {total_training_time:.1f}")
-print(f"total_seconds:    {t_eval - t_start:.1f}")
-print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
-print(f"num_steps:        {step}")
-print(f"num_params_M:     {num_params / 1e6:.2f}")
-print(f"n_hidden:         {N_HIDDEN}")
-print(f"n_layers:         {N_LAYERS}")
-print(f"t_steps:          {T_STEPS_RUN}")
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run one SHD SNN experiment")
+    parser.add_argument("--n-hidden", type=int, default=ExperimentConfig.n_hidden)
+    parser.add_argument("--n-layers", type=int, default=ExperimentConfig.n_layers)
+    parser.add_argument("--t-steps", type=int, default=ExperimentConfig.t_steps)
+    parser.add_argument("--batch-size", type=int, default=ExperimentConfig.batch_size)
+    parser.add_argument("--learning-rate", type=float, default=ExperimentConfig.learning_rate)
+    parser.add_argument("--weight-decay", type=float, default=ExperimentConfig.weight_decay)
+    parser.add_argument(
+        "--label-smoothing", type=float, default=ExperimentConfig.label_smoothing
+    )
+    parser.add_argument("--warmup-ratio", type=float, default=ExperimentConfig.warmup_ratio)
+    parser.add_argument("--final-lr-frac", type=float, default=ExperimentConfig.final_lr_frac)
+    parser.add_argument("--seed", type=int, default=ExperimentConfig.seed)
+    parser.add_argument(
+        "--time-budget-s", type=float, default=ExperimentConfig.time_budget_s
+    )
+    parser.add_argument(
+        "--log-jsonl",
+        type=Path,
+        default=Path("experiments/snn_runs.jsonl"),
+        help="Structured JSONL output path for run metadata and metrics.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = ExperimentConfig(
+        n_hidden=args.n_hidden,
+        n_layers=args.n_layers,
+        t_steps=args.t_steps,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        label_smoothing=args.label_smoothing,
+        warmup_ratio=args.warmup_ratio,
+        final_lr_frac=args.final_lr_frac,
+        seed=args.seed,
+        time_budget_s=args.time_budget_s,
+    )
+
+    result = train_once(cfg)
+
+    run_payload = {
+        "schema_version": 1,
+        "timestamp_utc": datetime.now(UTC).isoformat(),
+        "git_commit": get_git_commit_short(),
+        "python_seed": cfg.seed,
+        "mlx_version": mx.__version__,
+        "config": dataclasses.asdict(cfg),
+        "metrics": result,
+    }
+    append_jsonl(args.log_jsonl, run_payload)
+
+    print("---")
+    print(f"val_acc:          {result['val_acc']:.6f}")
+    print(f"training_seconds: {result['training_seconds']:.1f}")
+    print(f"total_seconds:    {result['total_seconds']:.1f}")
+    print(f"peak_vram_mb:     {result['peak_vram_mb']:.1f}")
+    print(f"num_steps:        {result['num_steps']}")
+    print(f"num_params_M:     {result['num_params_M']:.2f}")
+    print(f"n_hidden:         {cfg.n_hidden}")
+    print(f"n_layers:         {cfg.n_layers}")
+    print(f"t_steps:          {cfg.t_steps}")
+    print(f"log_jsonl:        {args.log_jsonl}")
+
+
+if __name__ == "__main__":
+    main()
