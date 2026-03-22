@@ -1,0 +1,3 @@
+[submodule "snn-ir"]
+	path = snn-ir
+	url = https://github.com/vlordier/snn-ir.git
