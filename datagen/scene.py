@@ -175,11 +175,33 @@ class GenesisStereoEventDataset:
         acc_b = R_wc.T @ specific_force_w
         return acc_b, kin["omega_body"]
 
+    @staticmethod
+    def _extract_rgb_depth(render_out: Any) -> tuple[np.ndarray, np.ndarray]:
+        """Normalize Genesis camera render output across API variants.
+
+        In genesis-world 0.4.x, ``render`` returns a 4-tuple:
+        ``(rgb, depth, seg, normal)`` where disabled channels are ``None``.
+        Older variants may return only an RGB frame.
+        """
+        if isinstance(render_out, tuple):
+            rgb = render_out[0]
+            depth = render_out[1] if len(render_out) > 1 else None
+        else:
+            rgb = render_out
+            depth = None
+
+        rgb_np = np.asarray(rgb)
+        if depth is None:
+            depth_np = np.zeros((rgb_np.shape[0], rgb_np.shape[1]), dtype=np.float32)
+        else:
+            depth_np = np.asarray(depth)
+        return rgb_np, depth_np
+
     def render_pair(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        rgb_left = np.asarray(self.left_cam.render(rgb=True))
-        depth_left = np.asarray(self.left_cam.render(depth=True))
-        rgb_right = np.asarray(self.right_cam.render(rgb=True))
-        depth_right = np.asarray(self.right_cam.render(depth=True))
+        left_out = self.left_cam.render(rgb=True, depth=True)
+        right_out = self.right_cam.render(rgb=True, depth=True)
+        rgb_left, depth_left = self._extract_rgb_depth(left_out)
+        rgb_right, depth_right = self._extract_rgb_depth(right_out)
         return rgb_left, depth_left, rgb_right, depth_right
 
     # ------------------------------------------------------------------
