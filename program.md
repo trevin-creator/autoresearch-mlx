@@ -483,6 +483,12 @@ Fix small issues. Skip fundamentally broken ideas.
 
 > Use Optuna to search dense, spike-inspired, and spiking architectures on MLX GPU (via Spyx) to minimize `val_bpb` under a fixed 5-minute training budget.
 
+Applied SNN mission objective:
+
+* optimize SNNs for **flight-path control** and **obstacle avoidance** in **drone swarms**
+* prioritize models and benchmarks that use **360-degree spherical camera** input
+* prefer temporal/event-driven representations that improve reaction latency and robustness under multi-agent motion
+
 ---
 
 ## NEVER STOP
