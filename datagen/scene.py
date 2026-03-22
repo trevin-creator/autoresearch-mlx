@@ -144,6 +144,64 @@ class GenesisStereoEventDataset:
         out = np.clip((1.0 - alpha) * a + alpha * b, 0.0, 255.0)
         return out.astype(np.uint8)
 
+    def _sample_floor_y(self) -> float:
+        """Sample floor clutter mostly outside the flight corridor around y=0."""
+        if self.rng.random() < 0.5:
+            return float(self.rng.uniform(-4.0, -1.6))
+        return float(self.rng.uniform(1.6, 4.0))
+
+    def _add_floor_clutter(self) -> None:
+        """Populate scene floor with grass-like tufts and random props."""
+        _gs = gs
+        if _gs is None:
+            msg = "Genesis is required. Install with: pip install genesis-world"
+            raise ImportError(msg)
+
+        grass_surface = self._surface_from_color((0.28, 0.55, 0.25), roughness=0.95)
+        rock_surface = self._surface_from_color((0.45, 0.42, 0.38), roughness=0.9)
+
+        # Grass tufts: thin cylinders with slight height/radius jitter.
+        for _ in range(140):
+            x = float(self.rng.uniform(0.5, 22.0))
+            y = self._sample_floor_y()
+            h = float(self.rng.uniform(0.08, 0.24))
+            r = float(self.rng.uniform(0.01, 0.03))
+            self.scene.add_entity(
+                _gs.morphs.Cylinder(
+                    pos=(x, y, h * 0.5),
+                    radius=r,
+                    height=h,
+                    fixed=True,
+                ),
+                surface=grass_surface,
+            )
+
+        # Low-frequency terrain clutter: rocks and small debris props.
+        for _ in range(45):
+            x = float(self.rng.uniform(0.5, 22.0))
+            y = self._sample_floor_y()
+            rad = float(self.rng.uniform(0.04, 0.2))
+            self.scene.add_entity(
+                _gs.morphs.Sphere(pos=(x, y, rad), radius=rad, fixed=True),
+                surface=rock_surface,
+            )
+
+        for _ in range(30):
+            x = float(self.rng.uniform(0.5, 22.0))
+            y = self._sample_floor_y()
+            sx = float(self.rng.uniform(0.08, 0.35))
+            sy = float(self.rng.uniform(0.08, 0.35))
+            sz = float(self.rng.uniform(0.05, 0.22))
+            color = (
+                float(self.rng.uniform(0.22, 0.55)),
+                float(self.rng.uniform(0.20, 0.45)),
+                float(self.rng.uniform(0.14, 0.32)),
+            )
+            self.scene.add_entity(
+                _gs.morphs.Box(pos=(x, y, sz * 0.5), size=(sx, sy, sz), fixed=True),
+                surface=self._surface_from_color(color, roughness=0.92),
+            )
+
     def build_scene(self) -> None:
         if gs is None:
             msg = "Genesis is required. Install with: pip install genesis-world"
@@ -223,6 +281,8 @@ class GenesisStereoEventDataset:
             gs.morphs.Sphere(pos=(18.0, -0.5, 1.0), radius=0.8),
             surface=self._surface_from_color((0.68, 0.22, 0.24), roughness=0.35),
         )
+
+        self._add_floor_clutter()
 
         half_b = self.stereo_cfg.baseline_m / 2.0
         self.left_cam = self.scene.add_camera(
