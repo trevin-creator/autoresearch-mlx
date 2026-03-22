@@ -18,7 +18,8 @@ def _make_spike_fn(surrogate_grad_fn, k=25.0):
     """
     @mx.custom_function
     def spike(u):
-        return (u >= 0).astype(u.dtype)
+        # Match spyx.axn.heaviside: spike only for strictly positive inputs.
+        return (u > 0).astype(u.dtype)
 
     @spike.vjp
     def spike_vjp(primals, cotangent, output):

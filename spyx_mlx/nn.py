@@ -6,14 +6,13 @@ All neurons follow the same interface:
     out, new_state = neuron(x, state)
     state = neuron.initial_state(batch_size)
 
-Design decisions vs spyx:
-- Spike timing: integrate-then-spike (V = beta*V + x; spike on new V) rather
-  than spyx's spike-then-update. Empirically better on SHD with 128 time bins.
+Design notes:
+- IF/LIF/ALIF/CuBaLIF update equations match spyx.nn for strict numerical
+    parity tests.
 - Beta parametrised in logit space (sigmoid reparametrisation). This constrains
   beta to (0,1) and provides implicit regularisation: the gradient through
   sigmoid at beta=0.9 is 0.09, slowing drift away from long-memory values.
 - Default beta/gamma init: logit(0.9) → fast training convergence on SHD.
-- CuBaLIF: single reset (spyx has a double-reset bug).
 - RLIF: uses previous-timestep spikes for feedback (no circular dependency).
 """
 
@@ -50,9 +49,9 @@ class IF(nn.Module):
         return mx.zeros((batch_size,) + self.hidden_shape)
 
     def __call__(self, x, V):
-        V = V + x
+        # Match spyx.IF: spike uses previous V, then membrane is updated.
         spike = self._spike(V - self.threshold)
-        V = V - spike * self.threshold
+        V = V + x - spike * self.threshold
         return spike, V
 
 
@@ -91,9 +90,9 @@ class LIF(nn.Module):
         return mx.zeros((batch_size,) + self.hidden_shape)
 
     def __call__(self, x, V):
-        V = self._beta() * V + x
+        # Match spyx.LIF: spike from previous V, then leaky integration update.
         spike = self._spike(V - self.threshold)
-        V = V - spike * self.threshold
+        V = self._beta() * V + x - spike * self.threshold
         return spike, V
 
 
@@ -145,7 +144,7 @@ class CuBaLIF(nn.Module):
         spike[t] = Heaviside(V[t] - threshold)
         V[t] -= spike[t] * threshold
 
-    Single reset (spyx has a double-reset bug).
+    Matches spyx.nn.CuBaLIF update order and reset behavior.
     State = mx.stack([V, I], axis=-1).
     """
 
@@ -176,10 +175,11 @@ class CuBaLIF(nn.Module):
 
     def __call__(self, x, state):
         V, I = state[..., 0], state[..., 1]
-        I = self._alpha() * I + x
-        V = self._beta() * V + I
         spike = self._spike(V - self.threshold)
-        V = V - spike * self.threshold
+        reset = spike * self.threshold
+        V = V - reset
+        I = self._alpha() * I + x
+        V = self._beta() * V + I - reset
         return spike, mx.stack([V, I], axis=-1)
 
 
@@ -230,9 +230,9 @@ class ALIF(nn.Module):
         beta = self._beta()
         gamma = self._gamma()
         thresh = self.threshold + T
-        V = beta * V + x
+        # Match spyx.ALIF: spike uses previous V and dynamic threshold.
         spike = self._spike(V - thresh)
-        V = V - spike * thresh
+        V = beta * V + x - spike * thresh
         T = gamma * T + (1.0 - gamma) * spike
         return spike, mx.stack([V, T], axis=-1)
 
