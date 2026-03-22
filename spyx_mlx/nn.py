@@ -145,7 +145,7 @@ class CuBaLIF(nn.Module):
         V[t] -= spike[t] * threshold
 
     Matches spyx.nn.CuBaLIF update order and reset behavior.
-    State = mx.stack([V, I], axis=-1).
+    State layout matches spyx: concatenate [V, I] along the last axis.
     """
 
     def __init__(self, hidden_shape, alpha_init=None, beta_init=None, threshold=1.0, activation=None):
@@ -171,16 +171,16 @@ class CuBaLIF(nn.Module):
         return self._beta_fixed if self._beta_fixed is not None else mx.sigmoid(self.beta_logit)
 
     def initial_state(self, batch_size):
-        return mx.zeros((batch_size,) + self.hidden_shape + (2,))
+        return mx.zeros((batch_size,) + tuple(2 * v for v in self.hidden_shape))
 
     def __call__(self, x, state):
-        V, I = state[..., 0], state[..., 1]
+        V, I = mx.split(state, 2, axis=-1)
         spike = self._spike(V - self.threshold)
         reset = spike * self.threshold
         V = V - reset
         I = self._alpha() * I + x
         V = self._beta() * V + I - reset
-        return spike, mx.stack([V, I], axis=-1)
+        return spike, mx.concatenate([V, I], axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ class ALIF(nn.Module):
         V[t]    -= spike[t] * thresh
         T[t]     = gamma * T[t-1] + (1 - gamma) * spike[t]
 
-    State = mx.stack([V, T], axis=-1).
+    State layout matches spyx: concatenate [V, T] along the last axis.
     """
 
     def __init__(self, hidden_shape, beta_init=None, gamma_init=None, threshold=1.0, activation=None):
@@ -223,10 +223,10 @@ class ALIF(nn.Module):
         return self._gamma_fixed if self._gamma_fixed is not None else mx.sigmoid(self.gamma_logit)
 
     def initial_state(self, batch_size):
-        return mx.zeros((batch_size,) + self.hidden_shape + (2,))
+        return mx.zeros((batch_size,) + tuple(2 * v for v in self.hidden_shape))
 
     def __call__(self, x, state):
-        V, T = state[..., 0], state[..., 1]
+        V, T = mx.split(state, 2, axis=-1)
         beta = self._beta()
         gamma = self._gamma()
         thresh = self.threshold + T
@@ -234,7 +234,7 @@ class ALIF(nn.Module):
         spike = self._spike(V - thresh)
         V = beta * V + x - spike * thresh
         T = gamma * T + (1.0 - gamma) * spike
-        return spike, mx.stack([V, T], axis=-1)
+        return spike, mx.concatenate([V, T], axis=-1)
 
 
 # ---------------------------------------------------------------------------
@@ -244,39 +244,38 @@ class ALIF(nn.Module):
 
 class RLIF(nn.Module):
     """
-    Recurrent LIF: previous-timestep spikes feed back through a learnable W_rec.
-        V[t] = beta * V[t-1] + x[t] + spike[t-1] @ W_rec
-        spike[t] = Heaviside(V[t] - threshold)
-        V[t] -= spike[t] * threshold
+    Recurrent LIF matching spyx.nn.RLIF semantics:
+        spike[t] = Heaviside(V[t-1] - threshold)
+        feedback = spike[t] @ W_rec
+        V[t] = beta * V[t-1] + x[t] + feedback - spike[t] * threshold
 
-    State = mx.stack([V, spike_prev], axis=-1).
+    State is membrane voltage V only.
     """
 
     def __init__(self, hidden_shape, beta_init=None, threshold=1.0, activation=None):
         super().__init__()
-        n = hidden_shape if isinstance(hidden_shape, int) else hidden_shape[0]
-        self.n = n
+        self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
+        n = self.hidden_shape[0]
         self.threshold = threshold
         self._spike = activation if activation is not None else superspike()
-        self.w_rec = nn.Linear(n, n, bias=False)
+        self.w_rec = mx.random.normal((n, n)) * (1.0 / math.sqrt(n))
         self._beta_fixed = None
         if beta_init is not None:
             self._beta_fixed = float(beta_init)
         else:
-            self.beta_logit = mx.full((n,), _LOGIT_09)
+            self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
 
     def _beta(self):
         return self._beta_fixed if self._beta_fixed is not None else mx.sigmoid(self.beta_logit)
 
     def initial_state(self, batch_size):
-        return mx.zeros((batch_size, self.n, 2))
+        return mx.zeros((batch_size,) + self.hidden_shape)
 
-    def __call__(self, x, state):
-        V, s_prev = state[..., 0], state[..., 1]
-        V = self._beta() * V + x + self.w_rec(s_prev)
+    def __call__(self, x, V):
         spike = self._spike(V - self.threshold)
-        V = V - spike * self.threshold
-        return spike, mx.stack([V, spike], axis=-1)
+        feedback = spike @ self.w_rec
+        V = self._beta() * V + x + feedback - spike * self.threshold
+        return spike, V
 
 
 # ---------------------------------------------------------------------------
