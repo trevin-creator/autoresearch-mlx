@@ -41,6 +41,17 @@ class BenchResult:
     ms_per_step: float
 
 
+@dataclass
+class ParityCheckResult:
+    neuron: str
+    ok: bool
+    atol: float
+    rtol: float
+    max_abs_out: float
+    max_abs_state: float
+    message: str
+
+
 def _parse_semver(version: str) -> tuple[int, int, int]:
     core = version.split("+", 1)[0]
     parts = core.split(".")
@@ -291,6 +302,116 @@ def _time_mlx(neuron: str, batch: int, hidden: int, steps: int, repeats: int):
     return np.array(times, dtype=np.float64)
 
 
+def _replace_param_named(tree, name: str, value):
+    if isinstance(tree, dict):
+        updated = {}
+        for key, node in tree.items():
+            if key == name:
+                updated[key] = value
+            else:
+                updated[key] = _replace_param_named(node, name, value)
+        return updated
+    return tree
+
+
+def _forward_jax(
+    neuron: str,
+    xs_np: np.ndarray,
+    s0_np: np.ndarray,
+    w_rec_np: np.ndarray | None = None,
+):
+    xs = jnp.array(xs_np)
+    s0 = jnp.array(s0_np)
+    transformed = _spyx_transformed(neuron, xs_np.shape[-1])
+    params = transformed.init(jax.random.PRNGKey(0), xs, s0)
+    if w_rec_np is not None:
+        params = _replace_param_named(
+            params, "w", jnp.array(w_rec_np, dtype=jnp.float32)
+        )
+    apply_fn = jax.jit(transformed.apply)
+    y, s = apply_fn(params, xs, s0)
+    y = np.array(jax.block_until_ready(y))
+    s = np.array(jax.block_until_ready(s))
+    return y, s
+
+
+def _forward_mlx(
+    neuron: str,
+    xs_np: np.ndarray,
+    s0_np: np.ndarray,
+    w_rec_np: np.ndarray | None = None,
+):
+    xs = mx.array(xs_np)
+    s0 = mx.array(s0_np)
+    hidden = xs_np.shape[-1]
+    if neuron == "RLIF":
+        cell = mlx_nn.RLIF(hidden_shape=(hidden,), beta_init=0.9, threshold=1.0)
+        if w_rec_np is not None:
+            cell.w_rec = mx.array(w_rec_np)
+
+        def fn(x_in, s_in):
+            outs = []
+            state = s_in
+            for t in range(x_in.shape[0]):
+                out, state = cell(x_in[t], state)
+                outs.append(out)
+            return mx.stack(outs, axis=0), state
+
+    else:
+        fn = _mlx_runner(neuron, hidden)
+
+    y, s = fn(xs, s0)
+    mx.eval(y, s)
+    return np.array(y), np.array(s)
+
+
+def _parity_check_neuron(
+    neuron: str,
+    batch: int,
+    hidden: int,
+    steps: int,
+    atol: float,
+    rtol: float,
+) -> ParityCheckResult:
+    rng = np.random.default_rng(123)
+    xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
+    s0_np = np.array(_state_for(neuron, batch, hidden, xp="jax"), dtype=np.float32)
+
+    w_rec_np = None
+    if neuron == "RLIF":
+        w_rec_np = rng.standard_normal((hidden, hidden), dtype=np.float32) * 0.2
+
+    try:
+        y_jax, s_jax = _forward_jax(neuron, xs_np, s0_np, w_rec_np=w_rec_np)
+        y_mlx, s_mlx = _forward_mlx(neuron, xs_np, s0_np, w_rec_np=w_rec_np)
+    except Exception as exc:  # noqa: BLE001
+        return ParityCheckResult(
+            neuron=neuron,
+            ok=False,
+            atol=atol,
+            rtol=rtol,
+            max_abs_out=float("inf"),
+            max_abs_state=float("inf"),
+            message=f"Execution error: {type(exc).__name__}: {exc}",
+        )
+
+    abs_out = np.max(np.abs(y_jax - y_mlx))
+    abs_state = np.max(np.abs(s_jax - s_mlx))
+    out_ok = np.allclose(y_jax, y_mlx, atol=atol, rtol=rtol)
+    state_ok = np.allclose(s_jax, s_mlx, atol=atol, rtol=rtol)
+    ok = bool(out_ok and state_ok)
+    msg = "pass" if ok else "mismatch"
+    return ParityCheckResult(
+        neuron=neuron,
+        ok=ok,
+        atol=atol,
+        rtol=rtol,
+        max_abs_out=float(abs_out),
+        max_abs_state=float(abs_state),
+        message=msg,
+    )
+
+
 def _summary(
     neuron: str,
     cfg_name: str,
@@ -327,6 +448,7 @@ def _run_parity_gate(run_parity_checks: bool) -> tuple[bool, str]:
         "-q",
         "spyx/tests/test_networks.py",
         "spyx/tests/test_mlx_strict_parity.py",
+        "spyx/tests/test_jax_mlx_direct_parity.py",
     ]
     proc = subprocess.run(
         cmd, capture_output=True, text=True, cwd=str(ROOT), check=False
@@ -358,6 +480,23 @@ def main():
         default=True,
         help="If JAX Metal stack is likely incompatible, skip JAX timing and continue with MLX.",
     )
+    parser.add_argument(
+        "--bench-parity-check",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run per-neuron JAX-vs-MLX forward parity checks before timing.",
+    )
+    parser.add_argument(
+        "--allow-bench-on-parity-fail",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Continue timing neurons even if benchmark parity check fails.",
+    )
+    parser.add_argument("--bench-parity-batch", type=int, default=8)
+    parser.add_argument("--bench-parity-hidden", type=int, default=64)
+    parser.add_argument("--bench-parity-steps", type=int, default=16)
+    parser.add_argument("--bench-parity-atol", type=float, default=1e-5)
+    parser.add_argument("--bench-parity-rtol", type=float, default=1e-5)
     args = parser.parse_args()
 
     if args.mlx_device == "cpu":
@@ -416,7 +555,44 @@ def main():
 
     rows: list[BenchResult] = []
     failures: list[dict[str, str]] = []
+    parity_results: list[ParityCheckResult] = []
+    blocked_neurons: set[str] = set()
+
+    if args.bench_parity_check and not effective_skip_jax and not args.skip_mlx:
+        print("\nRunning benchmark parity prechecks...")
+        for neuron in neurons:
+            check = _parity_check_neuron(
+                neuron=neuron,
+                batch=args.bench_parity_batch,
+                hidden=args.bench_parity_hidden,
+                steps=args.bench_parity_steps,
+                atol=args.bench_parity_atol,
+                rtol=args.bench_parity_rtol,
+            )
+            parity_results.append(check)
+            print(
+                f"parity {neuron}: {check.message} "
+                f"(max_abs_out={check.max_abs_out:.3e}, max_abs_state={check.max_abs_state:.3e})"
+            )
+            if not check.ok:
+                failures.append(
+                    {
+                        "backend": "bench-parity",
+                        "neuron": neuron,
+                        "config": "precheck",
+                        "error": (
+                            f"Parity mismatch at atol={check.atol}, rtol={check.rtol}; "
+                            f"max_abs_out={check.max_abs_out:.3e}, max_abs_state={check.max_abs_state:.3e}"
+                        ),
+                    }
+                )
+                if not args.allow_bench_on_parity_fail:
+                    blocked_neurons.add(neuron)
+
     for neuron in neurons:
+        if neuron in blocked_neurons:
+            print(f"skip timings for {neuron}: benchmark parity precheck failed")
+            continue
         for cfg_name, batch, hidden, steps in configs:
             try:
                 if not effective_skip_jax:
@@ -475,6 +651,13 @@ def main():
             "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
             "parity_gate": args.parity_gate,
+            "bench_parity_check": args.bench_parity_check,
+            "allow_bench_on_parity_fail": args.allow_bench_on_parity_fail,
+            "bench_parity_batch": args.bench_parity_batch,
+            "bench_parity_hidden": args.bench_parity_hidden,
+            "bench_parity_steps": args.bench_parity_steps,
+            "bench_parity_atol": args.bench_parity_atol,
+            "bench_parity_rtol": args.bench_parity_rtol,
             "jax_backend": jax.default_backend(),
             "mlx_default_device": str(mx.default_device()),
             "jax_stack": jax_stack,
@@ -483,6 +666,8 @@ def main():
         "results": [asdict(r) for r in rows],
         "failures": failures,
         "parity_gate_output": parity_output,
+        "bench_parity_results": [asdict(r) for r in parity_results],
+        "bench_parity_blocked_neurons": sorted(blocked_neurons),
     }
     args.json.write_text(json.dumps(payload, indent=2))
 
