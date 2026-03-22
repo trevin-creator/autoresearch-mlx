@@ -13,6 +13,7 @@ run_snn.log
 
 # Vendored / cloned upstream repos
 spyx/
+spyx_mlx/
 
 # Generated local experiment / smoke outputs
 _depth_*_smoke/
