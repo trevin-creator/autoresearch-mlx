@@ -1,3 +1,5 @@
 commit	val_acc	memory_gb	status	description
 5df79b4	0.790636	0.2	keep	baseline LIF 128 hidden 2 layers T=128 lr=1e-3 AdamW
 4311dc9	0.817138	0.2	keep	ALIF neurons + batch 48
+9dae0a4	0.816696	0.2	discard	ALIF 192 hidden 3 layers — no gain, fewer steps
+23cec1f	0.792845	0.2	keep	corrected library (logit-beta, single reset) ALIF 128x2 batch48
