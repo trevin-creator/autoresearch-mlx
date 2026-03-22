@@ -75,14 +75,15 @@ class LIF(nn.Module):
     beta is learnable per-neuron via sigmoid(beta_logit), initialised at 0.9.
     """
 
-    def __init__(self, hidden_shape, beta_init=None, threshold=1.0, activation=None):
+    def __init__(self, hidden_shape, beta=None, threshold=1.0, activation=None, beta_init=None):
         super().__init__()
         self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
         self.threshold = threshold
         self._spike = activation if activation is not None else superspike()
         self._beta_fixed = None
-        if beta_init is not None:
-            self._beta_fixed = float(beta_init)
+        beta_value = beta if beta is not None else beta_init
+        if beta_value is not None:
+            self._beta_fixed = float(beta_value)
         else:
             self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
 
@@ -114,12 +115,17 @@ class LI(nn.Module):
     beta learnable via sigmoid(beta_logit), initialised at 0.9.
     """
 
-    def __init__(self, hidden_shape, beta_init=None):
+    def __init__(self, layer_shape=None, beta=None, beta_init=None, hidden_shape=None):
         super().__init__()
-        self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
+        if layer_shape is None:
+            layer_shape = hidden_shape
+        if layer_shape is None:
+            raise ValueError("LI requires `layer_shape` (or compatibility alias `hidden_shape`).")
+        self.hidden_shape = (layer_shape,) if isinstance(layer_shape, int) else tuple(layer_shape)
         self._beta_fixed = None
-        if beta_init is not None:
-            self._beta_fixed = float(beta_init)
+        beta_value = beta if beta is not None else beta_init
+        if beta_value is not None:
+            self._beta_fixed = float(beta_value)
         else:
             self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
 
@@ -153,19 +159,21 @@ class CuBaLIF(nn.Module):
     State layout matches spyx: concatenate [V, I] along the last axis.
     """
 
-    def __init__(self, hidden_shape, alpha_init=None, beta_init=None, threshold=1.0, activation=None):
+    def __init__(self, hidden_shape, alpha=None, beta=None, threshold=1.0, activation=None, alpha_init=None, beta_init=None):
         super().__init__()
         self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
         self.threshold = threshold
         self._spike = activation if activation is not None else superspike()
         self._alpha_fixed = None
         self._beta_fixed = None
-        if alpha_init is not None:
-            self._alpha_fixed = float(alpha_init)
+        alpha_value = alpha if alpha is not None else alpha_init
+        beta_value = beta if beta is not None else beta_init
+        if alpha_value is not None:
+            self._alpha_fixed = float(alpha_value)
         else:
             self.alpha_logit = mx.full(self.hidden_shape, _LOGIT_09)
-        if beta_init is not None:
-            self._beta_fixed = float(beta_init)
+        if beta_value is not None:
+            self._beta_fixed = float(beta_value)
         else:
             self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
 
@@ -205,19 +213,21 @@ class ALIF(nn.Module):
     State layout matches spyx: concatenate [V, T] along the last axis.
     """
 
-    def __init__(self, hidden_shape, beta_init=None, gamma_init=None, threshold=1.0, activation=None):
+    def __init__(self, hidden_shape, beta=None, gamma=None, threshold=1.0, activation=None, beta_init=None, gamma_init=None):
         super().__init__()
         self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
         self.threshold = threshold
         self._spike = activation if activation is not None else superspike()
         self._beta_fixed = None
         self._gamma_fixed = None
-        if beta_init is not None:
-            self._beta_fixed = float(beta_init)
+        beta_value = beta if beta is not None else beta_init
+        gamma_value = gamma if gamma is not None else gamma_init
+        if beta_value is not None:
+            self._beta_fixed = float(beta_value)
         else:
             self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
-        if gamma_init is not None:
-            self._gamma_fixed = float(gamma_init)
+        if gamma_value is not None:
+            self._gamma_fixed = float(gamma_value)
         else:
             self.gamma_logit = mx.full(self.hidden_shape, _LOGIT_09)
 
@@ -257,7 +267,7 @@ class RLIF(nn.Module):
     State is membrane voltage V only.
     """
 
-    def __init__(self, hidden_shape, beta_init=None, threshold=1.0, activation=None):
+    def __init__(self, hidden_shape, beta=None, threshold=1.0, activation=None, beta_init=None):
         super().__init__()
         self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
         n = self.hidden_shape[0]
@@ -265,8 +275,9 @@ class RLIF(nn.Module):
         self._spike = activation if activation is not None else superspike()
         self.w_rec = mx.random.normal((n, n)) * (1.0 / math.sqrt(n))
         self._beta_fixed = None
-        if beta_init is not None:
-            self._beta_fixed = float(beta_init)
+        beta_value = beta if beta is not None else beta_init
+        if beta_value is not None:
+            self._beta_fixed = float(beta_value)
         else:
             self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
 
@@ -317,7 +328,7 @@ class RIF(nn.Module):
 class RCuBaLIF(nn.Module):
     """Recurrent CuBaLIF matching spyx.nn.RCuBaLIF semantics."""
 
-    def __init__(self, hidden_shape, alpha_init=None, beta_init=None, threshold=1.0, activation=None):
+    def __init__(self, hidden_shape, alpha=None, beta=None, threshold=1.0, activation=None, alpha_init=None, beta_init=None):
         super().__init__()
         self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
         n = self.hidden_shape[0]
@@ -326,12 +337,14 @@ class RCuBaLIF(nn.Module):
         self.w_rec = mx.random.normal((n, n)) * (1.0 / math.sqrt(n))
         self._alpha_fixed = None
         self._beta_fixed = None
-        if alpha_init is not None:
-            self._alpha_fixed = float(alpha_init)
+        alpha_value = alpha if alpha is not None else alpha_init
+        beta_value = beta if beta is not None else beta_init
+        if alpha_value is not None:
+            self._alpha_fixed = float(alpha_value)
         else:
             self.alpha_logit = mx.full(self.hidden_shape, _LOGIT_09)
-        if beta_init is not None:
-            self._beta_fixed = float(beta_init)
+        if beta_value is not None:
+            self._beta_fixed = float(beta_value)
         else:
             self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
 

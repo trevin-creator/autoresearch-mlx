@@ -79,7 +79,7 @@ def _integral_crossentropy_impl(traces, targets, smoothing=0.3, time_axis=1):
     return mx.mean(loss)
 
 
-def integral_crossentropy(traces=None, targets=None, smoothing=0.3, time_axis=1):
+def integral_crossentropy(smoothing=0.3, time_axis=1, traces=None, targets=None):
     """
     Spyx-compatible integral cross entropy.
 

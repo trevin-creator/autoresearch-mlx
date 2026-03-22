@@ -141,7 +141,7 @@ def get_lr(step: int, total_steps: int, peak_lr: float) -> float:
 
 def loss_fn(model, x_seq, targets):
     traces = model(x_seq)
-    return fn.integral_crossentropy(traces, targets, smoothing=LABEL_SMOOTHING)
+    return fn.integral_crossentropy(smoothing=LABEL_SMOOTHING)(traces, targets)
 
 
 t_start = time.time()
