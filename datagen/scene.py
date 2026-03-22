@@ -588,8 +588,6 @@ class GenesisStereoEventDataset:
             rgb_left, depth_left, rgb_right, depth_right = self.render_pair()
             rgb_left_sensor = self.left_sensor_model.apply(rgb_left)
             rgb_right_sensor = self.right_sensor_model.apply(rgb_right)
-            depth_gt = self.render_depth_gt()
-            disparity_gt = self.depth_to_disparity_gt(depth_left)
 
             events_left = self.left_emu.step(rgb_left_sensor, t_us=t_us)
             events_right = self.right_emu.step(rgb_right_sensor, t_us=t_us)
@@ -600,6 +598,9 @@ class GenesisStereoEventDataset:
             )
 
             if step_idx % self.sim_cfg.export_every_n_depth == 0:
+                # Defer the center-cam depth render to only when we'll actually use it
+                depth_gt = self.render_depth_gt()
+                disparity_gt = self.depth_to_disparity_gt(depth_left)
                 depth_left_path = self.writer.write_depth(step_idx, "left", depth_left)
                 depth_right_path = self.writer.write_depth(
                     step_idx, "right", depth_right
