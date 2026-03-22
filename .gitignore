@@ -1,9 +1,29 @@
 .DS_Store
 .venv/
+.bench-venv/
+.gen-venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 __pycache__/
 *.pyc
 *.log
 run.log
+run_snn.log
+
+# Generated local experiment / smoke outputs
+_depth_*_smoke/
+_esim_*_smoke/
+_floor_clutter_smoke/
+_path_smoke_obstacle_avoid/
+_readme_video_gen/
+_readme_video_gen_10s/
+_smoke_*/
+_texture_smoke*/
+
+# Local scratch artifacts
+TEST_COMMIT.txt
+
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md
