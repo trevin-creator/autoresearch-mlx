@@ -18,6 +18,12 @@ All training must:
 * Execute on the **GPU backend (Metal)**
 * Use **Spyx** as the execution/runtime layer whenever applicable
 
+Default expectation on Apple Silicon (including M4-class machines):
+
+* MLX should resolve to GPU by default
+* verify runtime device at startup
+* if runtime does not pick GPU, explicitly force GPU device selection before training
+
 This is **non-negotiable**:
 
 * Do not fall back to CPU unless debugging crashes
@@ -162,6 +168,19 @@ Each run:
 Goal:
 
 **Minimize `val_bpb`**
+
+Secondary objective:
+
+**Maximize stable resource utilization (GPU + RAM) within correctness and time constraints**
+
+This means:
+
+* push GPU utilization high during training windows
+* use as much RAM as useful without OOM or severe paging
+* avoid under-filled batches and tiny kernels when larger stable settings are possible
+* track memory and throughput for every experiment
+
+Do not optimize for low memory usage unless it is required for stability.
 
 ---
 
@@ -392,6 +411,7 @@ Key levers:
 * temporal state
 * architecture choice
 * compute efficiency under fixed time
+* aggressive but stable GPU/RAM saturation
 
 ---
 
