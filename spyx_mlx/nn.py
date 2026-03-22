@@ -17,9 +17,14 @@ Design notes:
 """
 
 import math
+import warnings
+from collections.abc import Sequence
+from itertools import product
+from typing import Optional, Union
 
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from .axn import superspike
 
@@ -276,6 +281,184 @@ class RLIF(nn.Module):
         feedback = spike @ self.w_rec
         V = self._beta() * V + x + feedback - spike * self.threshold
         return spike, V
+
+
+# ---------------------------------------------------------------------------
+# RIF — Recurrent Integrate-and-Fire
+# ---------------------------------------------------------------------------
+
+
+class RIF(nn.Module):
+    """Recurrent IF matching spyx.nn.RIF semantics."""
+
+    def __init__(self, hidden_shape, threshold=1.0, activation=None):
+        super().__init__()
+        self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
+        n = self.hidden_shape[0]
+        self.threshold = threshold
+        self._spike = activation if activation is not None else superspike()
+        self.w_rec = mx.random.normal((n, n)) * (1.0 / math.sqrt(n))
+
+    def initial_state(self, batch_size):
+        return mx.zeros((batch_size,) + self.hidden_shape)
+
+    def __call__(self, x, V):
+        spike = self._spike(V - self.threshold)
+        feedback = spike @ self.w_rec
+        V = V + x + feedback - spike * self.threshold
+        return spike, V
+
+
+# ---------------------------------------------------------------------------
+# RCuBaLIF — Recurrent Current-Based LIF
+# ---------------------------------------------------------------------------
+
+
+class RCuBaLIF(nn.Module):
+    """Recurrent CuBaLIF matching spyx.nn.RCuBaLIF semantics."""
+
+    def __init__(self, hidden_shape, alpha_init=None, beta_init=None, threshold=1.0, activation=None):
+        super().__init__()
+        self.hidden_shape = (hidden_shape,) if isinstance(hidden_shape, int) else tuple(hidden_shape)
+        n = self.hidden_shape[0]
+        self.threshold = threshold
+        self._spike = activation if activation is not None else superspike()
+        self.w_rec = mx.random.normal((n, n)) * (1.0 / math.sqrt(n))
+        self._alpha_fixed = None
+        self._beta_fixed = None
+        if alpha_init is not None:
+            self._alpha_fixed = float(alpha_init)
+        else:
+            self.alpha_logit = mx.full(self.hidden_shape, _LOGIT_09)
+        if beta_init is not None:
+            self._beta_fixed = float(beta_init)
+        else:
+            self.beta_logit = mx.full(self.hidden_shape, _LOGIT_09)
+
+    def _alpha(self):
+        return self._alpha_fixed if self._alpha_fixed is not None else mx.sigmoid(self.alpha_logit)
+
+    def _beta(self):
+        return self._beta_fixed if self._beta_fixed is not None else mx.sigmoid(self.beta_logit)
+
+    def initial_state(self, batch_size):
+        return mx.zeros((batch_size,) + tuple(2 * v for v in self.hidden_shape))
+
+    def __call__(self, x, state):
+        V, I = mx.split(state, 2, axis=-1)
+        spike = self._spike(V - self.threshold)
+        V = V - spike * self.threshold
+        feedback = spike @ self.w_rec
+        I = self._alpha() * I + x + feedback
+        V = self._beta() * V + I
+        return spike, mx.concatenate([V, I], axis=-1)
+
+
+class ActivityRegularization(nn.Module):
+    """Track cumulative spikes similarly to spyx.nn.ActivityRegularization."""
+
+    def __init__(self):
+        super().__init__()
+        self.spike_count = None
+
+    def reset(self):
+        self.spike_count = None
+
+    def __call__(self, spikes):
+        if self.spike_count is None:
+            self.spike_count = mx.zeros_like(spikes)
+        self.spike_count = self.spike_count + spikes
+        return spikes
+
+
+def PopulationCode(num_classes):
+    """Population coding helper matching spyx.nn.PopulationCode signature."""
+
+    def _pop_code(x):
+        return mx.sum(mx.reshape(x, (-1, num_classes)), axis=-1)
+
+    return _pop_code
+
+
+def _infer_shape(
+    x,
+    size: Union[int, Sequence[int]],
+    channel_axis: Optional[int] = -1,
+) -> tuple[int, ...]:
+    if isinstance(size, int):
+        if channel_axis and not 0 <= abs(channel_axis) < x.ndim:
+            raise ValueError(f"Invalid channel axis {channel_axis} for {x.shape}")
+        if channel_axis and channel_axis < 0:
+            channel_axis = x.ndim + channel_axis
+        return (1,) + tuple(size if d != channel_axis else 1 for d in range(1, x.ndim))
+    if len(size) < x.ndim:
+        return (1,) * (x.ndim - len(size)) + tuple(size)
+    return tuple(size)
+
+
+_VMAP_SHAPE_INFERENCE_WARNING = (
+    "When running under vmap, passing an int (except for 1) for window_shape or strides "
+    "can infer incorrect shapes if batch dims are hidden. Prefer full unbatched tuples."
+)
+
+
+def _warn_if_unsafe(window_shape, strides):
+    unsafe = lambda size: isinstance(size, int) and size != 1
+    if unsafe(window_shape) or unsafe(strides):
+        warnings.warn(_VMAP_SHAPE_INFERENCE_WARNING, DeprecationWarning)
+
+
+def _same_padding_1d(n: int, k: int, s: int) -> tuple[int, int]:
+    out = math.ceil(n / s)
+    pad = max((out - 1) * s + k - n, 0)
+    return pad // 2, pad - (pad // 2)
+
+
+def sum_pool(
+    value,
+    window_shape: Union[int, Sequence[int]],
+    strides: Union[int, Sequence[int]],
+    padding: str,
+    channel_axis: Optional[int] = -1,
+):
+    """Sum pool with spyx.nn-compatible signature."""
+    if padding not in ("SAME", "VALID"):
+        raise ValueError(f"Invalid padding '{padding}', must be 'SAME' or 'VALID'.")
+
+    _warn_if_unsafe(window_shape, strides)
+    window_shape = _infer_shape(value, window_shape, channel_axis)
+    strides = _infer_shape(value, strides, channel_axis)
+
+    x = np.array(value)
+    if padding == "SAME":
+        pads = [_same_padding_1d(int(n), int(k), int(s)) for n, k, s in zip(x.shape, window_shape, strides)]
+        x = np.pad(x, pads, mode="constant")
+
+    view = np.lib.stride_tricks.sliding_window_view(x, window_shape)
+    stride_slices = tuple(slice(None, None, int(s)) for s in strides)
+    view = view[stride_slices + (slice(None),) * x.ndim]
+    out = view.sum(axis=tuple(range(x.ndim, 2 * x.ndim)))
+    return mx.array(out)
+
+
+class SumPool(nn.Module):
+    """Sum pooling module matching spyx.nn.SumPool API."""
+
+    def __init__(
+        self,
+        window_shape: Union[int, Sequence[int]],
+        strides: Union[int, Sequence[int]],
+        padding: str,
+        channel_axis: Optional[int] = -1,
+    ):
+        super().__init__()
+        self.window_shape = window_shape
+        self.strides = strides
+        self.padding = padding
+        self.channel_axis = channel_axis
+
+    def __call__(self, value):
+        return sum_pool(value, self.window_shape, self.strides, self.padding, self.channel_axis)
 
 
 # ---------------------------------------------------------------------------
