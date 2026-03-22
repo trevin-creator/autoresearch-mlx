@@ -91,6 +91,67 @@ This project may live inside a larger repo.
 
 ---
 
+## Research Tooling (required)
+
+In addition to model experimentation, the agent must run structured literature and idea search.
+
+### ArXiv search via LangChain
+
+Use this exact pattern when gathering paper context:
+
+```python
+from langchain.tools import ArxivQueryRun
+from langchain.utilities import ArxivAPIWrapper
+
+tool = ArxivQueryRun(api_wrapper=ArxivAPIWrapper())
+
+tool.run("spiking neural networks")
+```
+
+Use ArXiv queries for:
+
+* spiking neural networks
+* surrogate gradients
+* event-driven sequence models
+* sparse/conditional computation
+* energy-efficient recurrent designs
+
+### MCP Sequential Thinking
+
+Enable and use the MCP sequential thinking server for multi-step reasoning and decision decomposition:
+
+* https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking
+
+Use it before major architecture pivots, and record the final decision path.
+
+### Document storage via docs MCP server
+
+Use docs MCP server for persistent research document storage and retrieval:
+
+* https://github.com/arabold/docs-mcp-server
+
+Store:
+
+* paper summaries
+* experiment hypotheses
+* failed ideas and why they failed
+* promising follow-up directions
+
+### Optional x.ai x-search tool
+
+If an x.ai key is available in `.env`, enable x-search and use it for broader web retrieval:
+
+* https://docs.x.ai/developers/tools/x-search
+
+Rules:
+
+* only enable when key is present
+* never hardcode API keys
+* prefer ArXiv first for scientific claims
+* use x-search to complement, not replace, scholarly sources
+
+---
+
 ## Experimentation
 
 Each run:
@@ -253,6 +314,40 @@ Example:
 ```
 abc1234	2.51	27.1	keep	optuna hybrid_spike lr=0.01 decay=0.93 thr=0.7
 ```
+
+---
+
+## Research Management Protocol
+
+Research must be managed as a first-class workflow, not ad hoc notes.
+
+For each substantial experiment cycle:
+
+1. Gather evidence:
+
+   * ArXiv search results
+   * optional x-search results (if configured)
+2. Run sequential reasoning:
+
+   * define candidate directions
+   * select one direction with explicit rationale
+3. Write decision artifacts to docs MCP storage:
+
+   * question
+   * evidence links
+   * chosen hypothesis
+   * expected failure modes
+4. Execute one Optuna trial and log metrics.
+5. Write post-run outcome:
+
+   * did hypothesis hold?
+   * what changed next?
+
+Minimum quality bar per cycle:
+
+* one traceable hypothesis
+* one traceable source-backed justification
+* one traceable outcome note in document storage
 
 ---
 
