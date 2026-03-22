@@ -19,6 +19,15 @@ from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, evaluate_bpb, make_data
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 
+def assert_mlx_gpu_or_die() -> None:
+    device = mx.default_device()
+    if getattr(device, "type", None) != mx.gpu:
+        raise RuntimeError(
+            f"MLX GPU is required for training, but current default device is {device}."
+        )
+    print(f"Using MLX device: {device}")
+
+
 @dataclass
 class GPTConfig:
     sequence_len: int = 2048
@@ -390,6 +399,7 @@ def get_lr_multiplier(progress):
 
 t_start = time.time()
 mx.random.seed(42)
+assert_mlx_gpu_or_die()
 
 tokenizer = Tokenizer.from_directory()
 vocab_size = tokenizer.get_vocab_size()

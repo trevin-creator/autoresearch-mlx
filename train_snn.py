@@ -34,6 +34,15 @@ from spyx_mlx.nn import ALIF, LI
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 
+def assert_mlx_gpu_or_die() -> None:
+    device = mx.default_device()
+    if getattr(device, "type", None) != mx.gpu:
+        raise RuntimeError(
+            f"MLX GPU is required for training, but current default device is {device}."
+        )
+    print(f"Using MLX device: {device}")
+
+
 # ---------------------------------------------------------------------------
 # Hyperparameters — edit these freely
 # ---------------------------------------------------------------------------
@@ -146,6 +155,7 @@ def loss_fn(model, x_seq, targets):
 
 t_start = time.time()
 mx.random.seed(42)
+assert_mlx_gpu_or_die()
 
 print("Loading SHD dataset ...")
 train_ds, test_ds = load_datasets(n_steps=T_STEPS_RUN)
