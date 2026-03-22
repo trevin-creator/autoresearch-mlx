@@ -41,7 +41,8 @@ offline step that produces standard NumPy files loadable on any platform.
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Resolution | 346 × 260 | Matches DVS346 sensor resolution |
+| Sensor profile | `ideal` (default) | Also supports `ov9281` global-shutter preset |
+| Resolution | 346 × 260 | Overridden by profile native size unless `--keep-camera-params` |
 | Stereo baseline | 0.10 m | ~human-eye scale |
 | C_pos, C_neg | 0.18 | Typical event camera contrast thresholds |
 | Threshold mismatch | Gaussian σ 0.02 | Per-pixel variation |
@@ -72,6 +73,12 @@ uv run generate_stereo_events.py \
     --out-dir ./my_dataset \
     --save-rgb
 
+  # OV9281-like global shutter + practical lens/sensor artifacts
+  uv run generate_stereo_events.py \
+    --sensor-profile ov9281 \
+    --baseline 0.10 \
+    --out-dir ./ov9281_dataset
+
 # Then train on the generated data
 uv run train_vision.py --data-dir ./out_genesis_stereo_events
 ```
@@ -89,7 +96,7 @@ out_genesis_stereo_events/
   rgb_left_preview/  (optional, --save-rgb)
   rgb_right_preview/ (optional)
   meta/
-    calibration.json   — pinhole intrinsics, stereo extrinsics, timing
+    calibration.json   — intrinsics, lens model, stereo extrinsics, sensor timing/noise metadata
     poses.csv          — per-frame rig + left/right camera poses (quat)
     imu.csv            — per-frame body-frame accel + gyro
     frames.csv         — per-frame file paths (events + depth/disparity GT)
@@ -145,8 +152,8 @@ used by `ExperimentConfig` in `train_snn.py`, with argparse CLI overrides.
    sub-stepping when |Δlog I| is large would improve realism.
 2. **No explicit hot/dead pixel map** — fixed defective-pixel maps are not
   yet modeled.
-3. **Noise is phenomenological** — leak/shot/photoreceptor noise are tuned
-  for realism but not fitted to a specific hardware calibration profile.
+3. **Noise is not fully calibrated** — OV9281 profile approximates practical
+  global-shutter behavior, but should still be fitted to measured sensor logs.
 4. **Event loop is Python** — the per-pixel iteration is not vectorized.
    For large resolutions or long sequences, a Cython or NumPy-vectorized
    version would speed things up significantly.

@@ -236,19 +236,34 @@ class DatasetWriter:
         calib = {
             "camera_model": "pinhole",
             "resolution": {"width": cam_cfg.width, "height": cam_cfg.height},
+            "sensor": {
+                "profile": cam_cfg.sensor_profile,
+                "shutter_model": cam_cfg.shutter_model,
+                "pixel_size_um": cam_cfg.pixel_size_um,
+                "full_well_e": cam_cfg.full_well_e,
+                "read_noise_e": cam_cfg.read_noise_e,
+                "dark_current_e_s": cam_cfg.dark_current_e_s,
+                "exposure_ratio": cam_cfg.exposure_ratio,
+            },
+            "lens": {
+                "model": "radial_tangential",
+                "distortion": list(cam_cfg.distortion),
+                "vignette_strength": cam_cfg.vignette_strength,
+                "psf_blur_sigma_px": cam_cfg.lens_blur_sigma_px,
+            },
             "intrinsics_left": {
                 "fx": fx,
                 "fy": fy,
                 "cx": cx,
                 "cy": cy,
-                "distortion": [0.0, 0.0, 0.0, 0.0],
+                "distortion": list(cam_cfg.distortion),
             },
             "intrinsics_right": {
                 "fx": fx,
                 "fy": fy,
                 "cx": cx,
                 "cy": cy,
-                "distortion": [0.0, 0.0, 0.0, 0.0],
+                "distortion": list(cam_cfg.distortion),
             },
             "stereo": {
                 "baseline_m": stereo_cfg.baseline_m,

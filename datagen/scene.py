@@ -18,6 +18,7 @@ import numpy as np
 from .config import CameraConfig, EventConfig, OutputConfig, SimConfig, StereoConfig
 from .emulator import EventCameraEmulator
 from .math_utils import lookat_rotation, normalize, quat_from_rotmat
+from .optics import SensorImageModel
 from .trajectory import ScriptedRigTrajectory
 from .writer import DatasetWriter
 
@@ -64,6 +65,19 @@ class GenesisStereoEventDataset:
             width=cam_cfg.width,
             cfg=event_cfg,
             rng=self.rng,
+        )
+
+        left_seed = int(self.rng.integers(0, 2**31 - 1))
+        right_seed = int(self.rng.integers(0, 2**31 - 1))
+        self.left_sensor_model = SensorImageModel(
+            cam_cfg=cam_cfg,
+            sim_dt_s=sim_cfg.sim_dt,
+            rng=np.random.default_rng(left_seed),
+        )
+        self.right_sensor_model = SensorImageModel(
+            cam_cfg=cam_cfg,
+            sim_dt_s=sim_cfg.sim_dt,
+            rng=np.random.default_rng(right_seed),
         )
 
     @staticmethod
@@ -443,8 +457,10 @@ class GenesisStereoEventDataset:
         # Initialise at t=0
         self.update_camera_poses(0.0)
         rgb_l0, _, rgb_r0, _ = self.render_pair()
-        self.left_emu.initialize(rgb_l0, t0_us=0)
-        self.right_emu.initialize(rgb_r0, t0_us=0)
+        rgb_l0_sensor = self.left_sensor_model.apply(rgb_l0)
+        rgb_r0_sensor = self.right_sensor_model.apply(rgb_r0)
+        self.left_emu.initialize(rgb_l0_sensor, t0_us=0)
+        self.right_emu.initialize(rgb_r0_sensor, t0_us=0)
 
         for step_idx in range(n_steps):
             self.scene.step()
@@ -453,11 +469,13 @@ class GenesisStereoEventDataset:
 
             pose_info = self.update_camera_poses(t)
             rgb_left, depth_left, rgb_right, depth_right = self.render_pair()
+            rgb_left_sensor = self.left_sensor_model.apply(rgb_left)
+            rgb_right_sensor = self.right_sensor_model.apply(rgb_right)
             depth_gt = self.render_depth_gt()
             disparity_gt = self.depth_to_disparity_gt(depth_left)
 
-            events_left = self.left_emu.step(rgb_left, t_us=t_us)
-            events_right = self.right_emu.step(rgb_right, t_us=t_us)
+            events_left = self.left_emu.step(rgb_left_sensor, t_us=t_us)
+            events_right = self.right_emu.step(rgb_right_sensor, t_us=t_us)
 
             left_events_path = self.writer.write_events(step_idx, "left", events_left)
             right_events_path = self.writer.write_events(
@@ -480,8 +498,8 @@ class GenesisStereoEventDataset:
                 disparity_gt_path = ""
 
             if self.out_cfg.save_rgb_preview:
-                self.writer.write_rgb_preview(step_idx, "left", rgb_left)
-                self.writer.write_rgb_preview(step_idx, "right", rgb_right)
+                self.writer.write_rgb_preview(step_idx, "left", rgb_left_sensor)
+                self.writer.write_rgb_preview(step_idx, "right", rgb_right_sensor)
 
             acc_b, gyro_b = self.ideal_imu_from_trajectory(t)
 

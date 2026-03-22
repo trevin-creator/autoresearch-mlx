@@ -17,6 +17,7 @@ from datagen.config import (
     StereoConfig,
 )
 from datagen.scene import GenesisStereoEventDataset
+from datagen.sensor_models import available_sensor_profiles, get_sensor_profile
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +29,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--width", type=int, default=346)
     p.add_argument("--height", type=int, default=260)
     p.add_argument("--fov", type=float, default=90.0, help="Horizontal FOV in degrees")
+    p.add_argument(
+        "--sensor-profile",
+        type=str,
+        default="ideal",
+        choices=available_sensor_profiles(),
+        help="Sensor/lens realism preset (includes OV9281 global-shutter profile)",
+    )
+    p.add_argument(
+        "--keep-camera-params",
+        action="store_true",
+        help="Do not override width/height/FOV with selected sensor profile",
+    )
+    p.add_argument(
+        "--vignette-strength",
+        type=float,
+        default=None,
+        help="Override vignette falloff strength (None uses profile default)",
+    )
+    p.add_argument(
+        "--lens-blur-sigma-px",
+        type=float,
+        default=None,
+        help="Override lens PSF blur sigma in pixels (None uses profile default)",
+    )
 
     # Stereo
     p.add_argument(
@@ -117,7 +142,38 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    cam_cfg = CameraConfig(width=args.width, height=args.height, fov_deg=args.fov)
+    profile = get_sensor_profile(args.sensor_profile)
+    if args.keep_camera_params:
+        cam_width = args.width
+        cam_height = args.height
+        cam_fov = args.fov
+    else:
+        cam_width = profile.native_width
+        cam_height = profile.native_height
+        cam_fov = profile.nominal_fov_deg
+
+    cam_cfg = CameraConfig(
+        width=cam_width,
+        height=cam_height,
+        fov_deg=cam_fov,
+        sensor_profile=profile.name,
+        shutter_model=profile.shutter_model,
+        pixel_size_um=profile.pixel_size_um,
+        full_well_e=profile.full_well_e,
+        read_noise_e=profile.read_noise_e,
+        dark_current_e_s=profile.dark_current_e_s,
+        distortion=profile.distortion,
+        vignette_strength=(
+            profile.vignette_strength
+            if args.vignette_strength is None
+            else float(args.vignette_strength)
+        ),
+        lens_blur_sigma_px=(
+            profile.lens_blur_sigma_px
+            if args.lens_blur_sigma_px is None
+            else float(args.lens_blur_sigma_px)
+        ),
+    )
     stereo_cfg = StereoConfig(baseline_m=args.baseline)
     event_cfg = EventConfig(
         c_pos=args.c_pos,

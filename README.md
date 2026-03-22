@@ -33,6 +33,8 @@ Top row: stereo RGB (left camera, right camera). Second row: stereo event frames
 Third row: per-camera stereo depth ground truth (left depth, right depth).
 Fourth row: overall drone-centric depth ground truth (center camera) and disparity ground truth.
 An IMU overlay shows body-frame acceleration and angular velocity for each frame.
+The generator also supports real-world profile presets, including an OV9281-like
+1MP global-shutter sensor model with lens distortion, vignetting, and sensor noise.
 
 Ground-truth files used in this visualization:
 

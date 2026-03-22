@@ -12,6 +12,16 @@ class CameraConfig:
     fov_deg: float = 90.0
     near: float = 0.01
     far: float = 100.0
+    sensor_profile: str = "ideal"
+    shutter_model: str = "global"
+    pixel_size_um: float = 3.0
+    full_well_e: float = 12000.0
+    read_noise_e: float = 0.0
+    dark_current_e_s: float = 0.0
+    distortion: tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)
+    vignette_strength: float = 0.0
+    lens_blur_sigma_px: float = 0.0
+    exposure_ratio: float = 0.95
 
 
 @dataclass(frozen=True)
