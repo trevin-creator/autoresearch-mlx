@@ -23,6 +23,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run staged SNN quantization pipeline")
     p.add_argument("--params", type=Path, default=Path("params_snn_quant.yaml"))
     p.add_argument(
+        "--profile",
+        type=str,
+        default="full",
+        help="Parameter profile name from params file (e.g. full, smoke).",
+    )
+    p.add_argument(
         "--stage",
         type=str,
         default="full",
@@ -55,6 +61,19 @@ def load_params(path: Path) -> dict[str, Any]:
     return data
 
 
+def select_profile_params(params: dict[str, Any], profile: str) -> dict[str, Any]:
+    profiles = params.get("profiles")
+    if not isinstance(profiles, dict):
+        return params
+
+    selected = profiles.get(profile)
+    if not isinstance(selected, dict):
+        available = ", ".join(sorted(str(k) for k in profiles))
+        msg = f"Unknown profile '{profile}'. Available: {available}"
+        raise KeyError(msg)
+    return selected
+
+
 def _mark_pipeline_event(
     *,
     path: Path,
@@ -74,7 +93,7 @@ def _mark_pipeline_event(
 
 def main() -> None:
     args = parse_args()
-    params = load_params(args.params)
+    params = select_profile_params(load_params(args.params), args.profile)
 
     fixed_cfg = dict(params.get("fixed_search", {}))
     ternary_cfg = dict(params.get("ternary_search", {}))
@@ -88,6 +107,7 @@ def main() -> None:
         status="started",
         details={
             "params": str(args.params),
+            "profile": args.profile,
             "skip_prereqs": args.skip_prereqs,
         },
     )
@@ -125,6 +145,7 @@ def main() -> None:
                     "status": "ok",
                     "stage": run_target,
                     "mode": "dagster",
+                    "profile": args.profile,
                     "pipeline_log": str(args.pipeline_log_jsonl),
                 },
                 indent=2,
@@ -198,6 +219,7 @@ def main() -> None:
             {
                 "status": "ok",
                 "stage": run_target,
+                "profile": args.profile,
                 "pipeline_log": str(args.pipeline_log_jsonl),
             },
             indent=2,

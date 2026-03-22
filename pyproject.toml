@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 run-snn-quant-pipeline = "run_snn_quant_pipeline:main"
+summarize-snn-quant = "summarize_snn_quant_results:main"
 
 [project.optional-dependencies]
 snn-ir = [

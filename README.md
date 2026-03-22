@@ -96,6 +96,12 @@ Each Verilator run writes trial context metadata to `experiments/verilator/trial
 # full staged pipeline: fixed -> ternary -> verilator (Dagster orchestration)
 uv run run_snn_quant_pipeline.py --params params_snn_quant.yaml --stage full
 
+# quick CI sanity profile (tiny trials/time budgets)
+uv run run_snn_quant_pipeline.py \
+	--params params_snn_quant.yaml \
+	--profile smoke \
+	--stage full
+
 # DVC staged execution (local cache tracking, no remote required)
 dvc repro snn_fixed_search
 dvc repro snn_ternary_search
@@ -103,6 +109,9 @@ dvc repro snn_ternary_verilator
 
 # One-shot DVC full pipeline
 dvc repro snn_quant_full_dag
+
+# compact side-by-side summary of best fixed/ternary/verilator candidates
+uv run summarize_snn_quant_results.py
 ```
 
 Pipeline artifacts and structured logs are written under:
