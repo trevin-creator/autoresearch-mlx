@@ -56,6 +56,10 @@ class ExperimentConfig:
     silence_reg_weight: float = 0.0
     sparsity_reg_weight: float = 0.0
     final_eval_batch_size: int = 256
+    weight_mode: str = "float"
+    ternary_threshold: float = 0.08
+    ternary_scale_mode: str = "mean_abs"
+    ternary_use_ste: bool = True
     seed: int = 42
     time_budget_s: float = float(TIME_BUDGET)
 
@@ -66,10 +70,21 @@ class ShdSnn(nn.Module):
     Linear -> ALIF -> Linear -> ALIF -> Linear -> LI
     """
 
-    def __init__(self, n_input: int, n_hidden: int, n_layers: int, n_classes: int):
+    def __init__(
+        self,
+        n_input: int,
+        n_hidden: int,
+        n_layers: int,
+        n_classes: int,
+        cfg: ExperimentConfig,
+    ):
         super().__init__()
         self.n_hidden = n_hidden
         self.n_layers = n_layers
+        self.weight_mode = cfg.weight_mode
+        self.ternary_threshold = cfg.ternary_threshold
+        self.ternary_scale_mode = cfg.ternary_scale_mode
+        self.ternary_use_ste = cfg.ternary_use_ste
 
         self.input_proj = nn.Linear(n_input, n_hidden, bias=False)
         self.hidden_linears = [
@@ -80,6 +95,30 @@ class ShdSnn(nn.Module):
         self.output_proj = nn.Linear(n_hidden, n_classes, bias=False)
         self.readout = LI(n_classes)
 
+    def _ternary_weight(self, w: mx.array) -> mx.array:
+        abs_w = mx.abs(w)
+        max_abs = mx.maximum(mx.max(abs_w), mx.array(1e-8, dtype=w.dtype))
+        threshold = self.ternary_threshold * max_abs
+        keep_mask = abs_w >= threshold
+
+        if self.ternary_scale_mode == "max_abs":
+            scale = max_abs
+        else:
+            keep_count = mx.maximum(mx.sum(keep_mask.astype(w.dtype)), mx.array(1.0))
+            scale = mx.sum(abs_w * keep_mask.astype(w.dtype)) / keep_count
+
+        ternary = mx.where(keep_mask, mx.sign(w) * scale, mx.zeros_like(w))
+
+        if self.ternary_use_ste and hasattr(mx, "stop_gradient"):
+            return w + mx.stop_gradient(ternary - w)
+        return ternary
+
+    def _linear(self, x: mx.array, linear: nn.Linear) -> mx.array:
+        if self.weight_mode != "ternary":
+            return linear(x)
+        q_weight = self._ternary_weight(linear.weight)
+        return x @ q_weight.T
+
     def __call__(self, x_seq: mx.array) -> mx.array:
         n_t, n_b, _ = x_seq.shape
 
@@ -89,16 +128,16 @@ class ShdSnn(nn.Module):
         traces = []
         for t in range(n_t):
             x = x_seq[t]
-            x = self.input_proj(x)
+            x = self._linear(x, self.input_proj)
             x, alif_states[0] = self.alif_layers[0](x, alif_states[0])
 
             for i, (linear, alif) in enumerate(
                 zip(self.hidden_linears, self.alif_layers[1:], strict=False)
             ):
-                x = linear(x)
+                x = self._linear(x, linear)
                 x, alif_states[i + 1] = alif(x, alif_states[i + 1])
 
-            x = self.output_proj(x)
+            x = self._linear(x, self.output_proj)
             v_out, li_state = self.readout(x, li_state)
             traces.append(v_out)
 
@@ -156,7 +195,7 @@ def train_once(cfg: ExperimentConfig) -> dict[str, Any]:
         f"train: {train_ds.N} samples, test: {test_ds.N} samples"
     )
 
-    model = ShdSnn(N_CHANNELS, cfg.n_hidden, cfg.n_layers, N_CLASSES)
+    model = ShdSnn(N_CHANNELS, cfg.n_hidden, cfg.n_layers, N_CLASSES, cfg)
     mx.eval(model.parameters())
     num_params = sum(p.size for _, p in tree_flatten(model.parameters()))
     print(
@@ -290,6 +329,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--final-lr-frac", type=float, default=ExperimentConfig.final_lr_frac
     )
+    parser.add_argument(
+        "--weight-mode",
+        type=str,
+        default=ExperimentConfig.weight_mode,
+        choices=["float", "ternary"],
+        help="Weight path: float baseline or ternary projected weights.",
+    )
+    parser.add_argument(
+        "--ternary-threshold",
+        type=float,
+        default=ExperimentConfig.ternary_threshold,
+        help="Relative threshold used for ternary {-alpha,0,+alpha} projection.",
+    )
+    parser.add_argument(
+        "--ternary-scale-mode",
+        type=str,
+        default=ExperimentConfig.ternary_scale_mode,
+        choices=["mean_abs", "max_abs"],
+        help="How alpha is computed for ternary non-zero weights.",
+    )
+    parser.add_argument(
+        "--ternary-use-ste",
+        action=argparse.BooleanOptionalAction,
+        default=ExperimentConfig.ternary_use_ste,
+        help="Use straight-through estimator for ternary projection gradients.",
+    )
     parser.add_argument("--seed", type=int, default=ExperimentConfig.seed)
     parser.add_argument(
         "--time-budget-s", type=float, default=ExperimentConfig.time_budget_s
@@ -315,6 +380,10 @@ def main() -> None:
         label_smoothing=args.label_smoothing,
         warmup_ratio=args.warmup_ratio,
         final_lr_frac=args.final_lr_frac,
+        weight_mode=args.weight_mode,
+        ternary_threshold=args.ternary_threshold,
+        ternary_scale_mode=args.ternary_scale_mode,
+        ternary_use_ste=args.ternary_use_ste,
         seed=args.seed,
         time_budget_s=args.time_budget_s,
     )

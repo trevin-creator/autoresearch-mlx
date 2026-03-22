@@ -24,6 +24,36 @@ uv run train.py
 
 Then point Claude Code or another coding agent at `program.md` and let it run the loop.
 
+## Ternary SNN Search + Verilator
+
+For SHD SNN experiments, ternary training/search is now available in the existing scripts.
+
+```bash
+# single ternary run
+uv run train_snn.py \
+	--weight-mode ternary \
+	--ternary-threshold 0.08 \
+	--ternary-scale-mode mean_abs \
+	--ternary-use-ste
+
+# architecture + hyperparameter search for ternary models
+uv run search_snn_optuna.py \
+	--trials 20 \
+	--ternary-search \
+	--ternary-threshold-min 0.02 \
+	--ternary-threshold-max 0.35
+
+# ternary search with a post-trial Verilator step
+# placeholders: {trial_dir}, {trial_number}
+uv run search_snn_optuna.py \
+	--trials 10 \
+	--ternary-search \
+	--run-verilator \
+	--verilator-command "verilator --version"
+```
+
+Each Verilator run writes trial context metadata to `experiments/verilator/trial_XXXX/trial_context.json` before executing the Verilator command.
+
 ## 3D Render
 
 [3D render][stereo event camera simulation]
