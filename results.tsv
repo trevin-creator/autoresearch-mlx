@@ -18,3 +18,4 @@ c4e7345	1.644541	3.0	discard	adam beta2 0.99 instead of 0.95
 e2c1a1d	1.618456	3.0	keep	set final LR frac to 0.1
 fef7ef5	1.833610	3.0	discard	sharper attention scale 1/d instead of 1/sqrt(d)
 f816b32	1.615656	3.0	keep	reduce warmdown from 0.5 to 0.3
+1f9378c	1.611359	3.0	keep	warmdown 0.2
