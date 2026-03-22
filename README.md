@@ -30,9 +30,10 @@ Then point Claude Code or another coding agent at `program.md` and let it run th
 
 Top row: stereo RGB (left camera, right camera). Bottom row: stereo event frames
 (left events, right events), with positive polarity in red and negative polarity in blue.
+Third row: stereo depth maps (ground-truth), where near is brighter.
 
 <video controls width="640" preload="metadata">
-	<source src="assets/stereo-event-camera-simulation-5s.mp4" type="video/mp4" />
+	<source src="assets/stereo-event-camera-simulation-10s.mp4" type="video/mp4" />
 	Your browser does not support the video tag.
 </video>
 
@@ -89,4 +90,4 @@ The Mac Mini result matters because it did not just rediscover the same exact re
 
 MIT. See [LICENSE](LICENSE).
 
-[stereo event camera simulation]: assets/stereo-event-camera-simulation-5s.mp4
+[stereo event camera simulation]: assets/stereo-event-camera-simulation-10s.mp4

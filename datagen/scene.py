@@ -120,12 +120,37 @@ class GenesisStereoEventDataset:
             raise ImportError(msg)
         return _gs.surfaces.Rough(color=color, roughness=roughness, metallic=metallic)
 
+    def _noise_texture(
+        self,
+        size: int,
+        base_color: tuple[int, int, int],
+        noise_strength: int = 28,
+    ) -> np.ndarray:
+        base = np.full((size, size, 3), base_color, dtype=np.int16)
+        noise = self.rng.integers(
+            -noise_strength,
+            noise_strength + 1,
+            size=(size, size, 3),
+            dtype=np.int16,
+        )
+        return np.clip(base + noise, 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _blend_textures(
+        tex_a: np.ndarray, tex_b: np.ndarray, alpha: float
+    ) -> np.ndarray:
+        a = tex_a.astype(np.float32)
+        b = tex_b.astype(np.float32)
+        out = np.clip((1.0 - alpha) * a + alpha * b, 0.0, 255.0)
+        return out.astype(np.uint8)
+
     def build_scene(self) -> None:
         if gs is None:
             msg = "Genesis is required. Install with: pip install genesis-world"
             raise ImportError(msg)
 
-        backend = gs.gpu if self.sim_cfg.backend == "gpu" else gs.cpu
+        backend = gs.metal if self.sim_cfg.backend == "gpu" else gs.cpu
+        print(f"[datagen] Genesis backend={backend}")
         gs.init(backend=backend)
 
         self.scene = gs.Scene(
@@ -139,10 +164,22 @@ class GenesisStereoEventDataset:
         )
 
         # Procedural textures keep the scene visually distinct for stereo demos.
-        ground_tex = self._checker_texture(512, 32, (76, 82, 86), (58, 63, 67))
-        box1_tex = self._checker_texture(256, 16, (154, 108, 72), (118, 80, 52))
-        box2_tex = self._checker_texture(256, 12, (64, 136, 198), (32, 90, 148))
-        box3_tex = self._checker_texture(256, 10, (196, 132, 58), (122, 76, 38))
+        # Blend pattern + random noise to create richer, less synthetic surfaces.
+        ground_checker = self._checker_texture(512, 24, (78, 84, 90), (52, 57, 61))
+        ground_noise = self._noise_texture(512, (68, 74, 79), noise_strength=18)
+        ground_tex = self._blend_textures(ground_checker, ground_noise, alpha=0.35)
+
+        box1_checker = self._checker_texture(256, 14, (154, 108, 72), (118, 80, 52))
+        box1_noise = self._noise_texture(256, (136, 96, 62), noise_strength=34)
+        box1_tex = self._blend_textures(box1_checker, box1_noise, alpha=0.45)
+
+        box2_checker = self._checker_texture(256, 10, (64, 136, 198), (32, 90, 148))
+        box2_noise = self._noise_texture(256, (58, 118, 170), noise_strength=30)
+        box2_tex = self._blend_textures(box2_checker, box2_noise, alpha=0.42)
+
+        box3_checker = self._checker_texture(256, 8, (196, 132, 58), (122, 76, 38))
+        box3_noise = self._noise_texture(256, (170, 112, 50), noise_strength=36)
+        box3_tex = self._blend_textures(box3_checker, box3_noise, alpha=0.48)
         cube_mesh = (
             Path(__file__).resolve().parents[1] / "assets" / "meshes" / "uv_cube.obj"
         )
