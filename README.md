@@ -28,6 +28,9 @@ Then point Claude Code or another coding agent at `program.md` and let it run th
 
 [3D render][stereo event camera simulation]
 
+Top row: stereo RGB (left camera, right camera). Bottom row: stereo event frames
+(left events, right events), with positive polarity in red and negative polarity in blue.
+
 <video controls width="640" preload="metadata">
 	<source src="assets/stereo-event-camera-simulation-5s.mp4" type="video/mp4" />
 	Your browser does not support the video tag.
