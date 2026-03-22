@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -315,6 +316,27 @@ def _summary(
     )
 
 
+def _run_parity_gate(run_parity_checks: bool) -> tuple[bool, str]:
+    if not run_parity_checks:
+        return True, "Parity gate disabled by CLI flag."
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "spyx/tests/test_networks.py",
+        "spyx/tests/test_mlx_strict_parity.py",
+    ]
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, cwd=str(ROOT), check=False
+    )
+    output = (proc.stdout + "\n" + proc.stderr).strip()
+    if proc.returncode == 0:
+        return True, output
+    return False, output
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Benchmark spyx (JAX) vs spyx_mlx (MLX)"
@@ -324,6 +346,12 @@ def main():
     parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--skip-jax", action="store_true")
     parser.add_argument("--skip-mlx", action="store_true")
+    parser.add_argument(
+        "--parity-gate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run parity tests before benchmarking and abort if they fail.",
+    )
     parser.add_argument(
         "--auto-skip-incompatible-jax-metal",
         action=argparse.BooleanOptionalAction,
@@ -336,6 +364,32 @@ def main():
         mx.set_default_device(mx.cpu)
     elif args.mlx_device == "gpu":
         mx.set_default_device(mx.gpu)
+
+    parity_ok, parity_output = _run_parity_gate(args.parity_gate)
+    if not parity_ok:
+        print("Parity gate failed. Refusing to run benchmark timings.")
+        print(parity_output)
+        payload = {
+            "run_config": {
+                "repeats": args.repeats,
+                "mlx_device": args.mlx_device,
+                "skip_jax": args.skip_jax,
+                "skip_mlx": args.skip_mlx,
+                "parity_gate": args.parity_gate,
+            },
+            "results": [],
+            "failures": [
+                {
+                    "backend": "parity-gate",
+                    "neuron": "ALL",
+                    "config": "preflight",
+                    "error": "Parity tests failed; see parity_gate_output.",
+                }
+            ],
+            "parity_gate_output": parity_output,
+        }
+        args.json.write_text(json.dumps(payload, indent=2))
+        raise SystemExit(2)
 
     configs = [
         ("small", 32, 128, 128),
@@ -420,6 +474,7 @@ def main():
             "mlx_device": args.mlx_device,
             "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
+            "parity_gate": args.parity_gate,
             "jax_backend": jax.default_backend(),
             "mlx_default_device": str(mx.default_device()),
             "jax_stack": jax_stack,
@@ -427,6 +482,7 @@ def main():
         },
         "results": [asdict(r) for r in rows],
         "failures": failures,
+        "parity_gate_output": parity_output,
     }
     args.json.write_text(json.dumps(payload, indent=2))
 
