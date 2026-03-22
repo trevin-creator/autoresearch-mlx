@@ -374,6 +374,98 @@ def _time_mlx(
     return np.array(times, dtype=np.float64)
 
 
+def _time_jax_train_step(
+    neuron: str,
+    batch: int,
+    hidden: int,
+    steps: int,
+    repeats: int,
+    warmup_repeats: int,
+):
+    rng = np.random.default_rng(0)
+    xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
+    xs = jnp.array(xs_np)
+    s0 = _state_for(neuron, batch, hidden, xp="jax")
+
+    transformed = _spyx_transformed(neuron, hidden)
+    params = transformed.init(jax.random.PRNGKey(0), xs, s0)
+
+    def loss_fn(p, x_in, s_in):
+        y, s = transformed.apply(p, x_in, s_in)
+        return jnp.mean(y * y) + 1e-6 * jnp.mean(s * s)
+
+    train_step = jax.jit(jax.value_and_grad(loss_fn))
+
+    for _ in range(warmup_repeats):
+        loss, grads = train_step(params, xs, s0)
+        jax.block_until_ready(loss)
+        jax.block_until_ready(grads)
+
+    times = []
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        loss, grads = train_step(params, xs, s0)
+        jax.block_until_ready(loss)
+        jax.block_until_ready(grads)
+        times.append(time.perf_counter() - t0)
+    return np.array(times, dtype=np.float64)
+
+
+def _mlx_train_cell(neuron: str, hidden: int):
+    hidden_shape = (hidden,)
+    if neuron == "IF":
+        return mlx_nn.IF(hidden_shape=hidden_shape, threshold=1.0)
+    if neuron == "LIF":
+        return mlx_nn.LIF(hidden_shape=hidden_shape, threshold=1.0)
+    if neuron == "ALIF":
+        return mlx_nn.ALIF(hidden_shape=hidden_shape, threshold=1.0)
+    if neuron == "CuBaLIF":
+        return mlx_nn.CuBaLIF(hidden_shape=hidden_shape, threshold=1.0)
+    if neuron == "RLIF":
+        return mlx_nn.RLIF(hidden_shape=hidden_shape, threshold=1.0)
+    raise ValueError(f"Unsupported neuron: {neuron}")
+
+
+def _time_mlx_train_step(
+    neuron: str,
+    batch: int,
+    hidden: int,
+    steps: int,
+    repeats: int,
+    warmup_repeats: int,
+):
+    import mlx.nn as mlxn  # local import to avoid broad module dependency at import time
+
+    rng = np.random.default_rng(0)
+    xs_np = rng.standard_normal((steps, batch, hidden), dtype=np.float32)
+    xs = mx.array(xs_np)
+    s0 = _state_for(neuron, batch, hidden, xp="mlx")
+    cell = _mlx_train_cell(neuron, hidden)
+
+    def loss_fn(model, x_in, s_in):
+        state = s_in
+        outs = []
+        for t in range(x_in.shape[0]):
+            y, state = model(x_in[t], state)
+            outs.append(y)
+        y_all = mx.stack(outs, axis=0)
+        return mx.mean(y_all * y_all) + 1e-6 * mx.mean(state * state)
+
+    value_and_grad = mlxn.value_and_grad(cell, loss_fn)
+
+    for _ in range(warmup_repeats):
+        loss, grads = value_and_grad(cell, xs, s0)
+        mx.eval(loss, grads)
+
+    times = []
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        loss, grads = value_and_grad(cell, xs, s0)
+        mx.eval(loss, grads)
+        times.append(time.perf_counter() - t0)
+    return np.array(times, dtype=np.float64)
+
+
 def _replace_param_named(tree, name: str, value):
     if isinstance(tree, dict):
         updated = {}
@@ -567,6 +659,12 @@ def main():
     )
     parser.add_argument("--repeats", type=int, default=8)
     parser.add_argument("--warmup-repeats", type=int, default=2)
+    parser.add_argument(
+        "--benchmark-kind",
+        choices=["forward", "train-step"],
+        default="forward",
+        help="Benchmark forward pass only, or full training step (forward+backward).",
+    )
     parser.add_argument("--json", type=Path, default=Path("bench_spyx_vs_mlx.json"))
     parser.add_argument("--mlx-device", choices=["auto", "cpu", "gpu"], default="auto")
     parser.add_argument("--skip-jax", action="store_true")
@@ -737,14 +835,24 @@ def main():
         for cfg_name, batch, hidden, steps in configs:
             try:
                 if not effective_skip_jax:
-                    jax_times = _time_jax(
-                        neuron,
-                        batch,
-                        hidden,
-                        steps,
-                        args.repeats,
-                        args.warmup_repeats,
-                    )
+                    if args.benchmark_kind == "train-step" and neuron != "IF":
+                        jax_times = _time_jax_train_step(
+                            neuron,
+                            batch,
+                            hidden,
+                            steps,
+                            args.repeats,
+                            args.warmup_repeats,
+                        )
+                    else:
+                        jax_times = _time_jax(
+                            neuron,
+                            batch,
+                            hidden,
+                            steps,
+                            args.repeats,
+                            args.warmup_repeats,
+                        )
                     rows.append(
                         _summary(
                             neuron,
@@ -768,14 +876,24 @@ def main():
 
             try:
                 if not args.skip_mlx:
-                    mlx_times = _time_mlx(
-                        neuron,
-                        batch,
-                        hidden,
-                        steps,
-                        args.repeats,
-                        args.warmup_repeats,
-                    )
+                    if args.benchmark_kind == "train-step" and neuron != "IF":
+                        mlx_times = _time_mlx_train_step(
+                            neuron,
+                            batch,
+                            hidden,
+                            steps,
+                            args.repeats,
+                            args.warmup_repeats,
+                        )
+                    else:
+                        mlx_times = _time_mlx(
+                            neuron,
+                            batch,
+                            hidden,
+                            steps,
+                            args.repeats,
+                            args.warmup_repeats,
+                        )
                     rows.append(
                         _summary(
                             neuron,
@@ -803,6 +921,7 @@ def main():
         "run_config": {
             "repeats": args.repeats,
             "warmup_repeats": args.warmup_repeats,
+            "benchmark_kind": args.benchmark_kind,
             "mlx_device": args.mlx_device,
             "skip_jax": effective_skip_jax,
             "skip_mlx": args.skip_mlx,
@@ -840,7 +959,8 @@ def main():
     payload["noisy_rows"] = noisy_rows
     args.json.write_text(json.dumps(payload, indent=2))
 
-    print("\nSummary (ms/step, lower is better):")
+    summary_unit = "ms/train-step" if args.benchmark_kind == "train-step" else "ms/step"
+    print(f"\nSummary ({summary_unit}, lower is better):")
     print(
         f"neuron\tconfig\t{jax_backend_name}\t{mlx_backend_name}\tspeedup(mlx_vs_jax)"
     )
