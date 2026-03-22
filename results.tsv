@@ -14,3 +14,5 @@ ef3a2f4	1.823991	3.3	keep	halve batch to 2^14
 ae30e52	1.638309	3.0	keep	lower matrix LR to 0.01
 9890689	3.559808	3.0	discard	weight tying (share embed and unembed)
 eb81636	1.630049	3.0	keep	increase weight decay from 0.2 to 0.3
+c4e7345	1.644541	3.0	discard	adam beta2 0.99 instead of 0.95
+e2c1a1d	1.618456	3.0	keep	set final LR frac to 0.1
