@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 
 import mlx.core as mx
-import mlx.nn as nn
+from mlx import nn
 from mlx.utils import tree_flatten, tree_map
 
 from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, evaluate_bpb, make_dataloader
@@ -51,7 +51,9 @@ def has_ve(layer_idx, n_layer):
 def create_additive_causal_mask(seq_len, dtype=mx.float32):
     indices = mx.arange(seq_len)
     blocked = indices[None, :] > indices[:, None]
-    return mx.where(blocked, mx.array(float("-inf"), dtype=dtype), mx.array(0.0, dtype=dtype))
+    return mx.where(
+        blocked, mx.array(float("-inf"), dtype=dtype), mx.array(0.0, dtype=dtype)
+    )
 
 
 def create_sliding_window_mask(seq_len, window_size, dtype=mx.float32):
@@ -59,7 +61,9 @@ def create_sliding_window_mask(seq_len, window_size, dtype=mx.float32):
     causal = indices[None, :] > indices[:, None]
     too_far = (indices[:, None] - indices[None, :]) >= window_size
     blocked = causal | too_far
-    return mx.where(blocked, mx.array(float("-inf"), dtype=dtype), mx.array(0.0, dtype=dtype))
+    return mx.where(
+        blocked, mx.array(float("-inf"), dtype=dtype), mx.array(0.0, dtype=dtype)
+    )
 
 
 def get_peak_memory_mb():
@@ -158,24 +162,44 @@ class GPT(nn.Module):
         n_embd = self.config.n_embd
         scale = 3**0.5 * n_embd**-0.5
 
-        self.wte.weight = (mx.random.normal(self.wte.weight.shape) * 1.0).astype(mx.bfloat16)
-        self.lm_head.weight = (mx.random.normal(self.lm_head.weight.shape) * 0.001).astype(mx.bfloat16)
+        self.wte.weight = (mx.random.normal(self.wte.weight.shape) * 1.0).astype(
+            mx.bfloat16
+        )
+        self.lm_head.weight = (
+            mx.random.normal(self.lm_head.weight.shape) * 0.001
+        ).astype(mx.bfloat16)
 
         for block in self.blocks:
-            block.attn.c_q.weight = mx.random.uniform(-scale, scale, block.attn.c_q.weight.shape).astype(mx.bfloat16)
-            block.attn.c_k.weight = mx.random.uniform(-scale, scale, block.attn.c_k.weight.shape).astype(mx.bfloat16)
-            block.attn.c_v.weight = mx.random.uniform(-scale, scale, block.attn.c_v.weight.shape).astype(mx.bfloat16)
-            block.attn.c_proj.weight = mx.zeros_like(block.attn.c_proj.weight).astype(mx.bfloat16)
-            block.mlp.c_fc.weight = mx.random.uniform(-scale, scale, block.mlp.c_fc.weight.shape).astype(mx.bfloat16)
-            block.mlp.c_proj.weight = mx.zeros_like(block.mlp.c_proj.weight).astype(mx.bfloat16)
+            block.attn.c_q.weight = mx.random.uniform(
+                -scale, scale, block.attn.c_q.weight.shape
+            ).astype(mx.bfloat16)
+            block.attn.c_k.weight = mx.random.uniform(
+                -scale, scale, block.attn.c_k.weight.shape
+            ).astype(mx.bfloat16)
+            block.attn.c_v.weight = mx.random.uniform(
+                -scale, scale, block.attn.c_v.weight.shape
+            ).astype(mx.bfloat16)
+            block.attn.c_proj.weight = mx.zeros_like(block.attn.c_proj.weight).astype(
+                mx.bfloat16
+            )
+            block.mlp.c_fc.weight = mx.random.uniform(
+                -scale, scale, block.mlp.c_fc.weight.shape
+            ).astype(mx.bfloat16)
+            block.mlp.c_proj.weight = mx.zeros_like(block.mlp.c_proj.weight).astype(
+                mx.bfloat16
+            )
             if block.attn.ve_gate is not None:
-                block.attn.ve_gate.weight = mx.zeros_like(block.attn.ve_gate.weight).astype(mx.bfloat16)
+                block.attn.ve_gate.weight = mx.zeros_like(
+                    block.attn.ve_gate.weight
+                ).astype(mx.bfloat16)
 
         self.resid_lambdas = mx.ones((self.config.n_layer,), dtype=mx.float32)
         self.x0_lambdas = mx.full((self.config.n_layer,), 0.1, dtype=mx.float32)
 
         for ve in self.value_embeds.values():
-            ve.weight = mx.random.uniform(-scale, scale, ve.weight.shape).astype(mx.bfloat16)
+            ve.weight = mx.random.uniform(-scale, scale, ve.weight.shape).astype(
+                mx.bfloat16
+            )
 
     def _compute_window_sizes(self, config):
         pattern = config.window_pattern.upper()
@@ -198,8 +222,13 @@ class GPT(nn.Module):
                 if window_size >= seq_len:
                     self._mask_cache[key] = create_additive_causal_mask(seq_len)
                 else:
-                    self._mask_cache[key] = create_sliding_window_mask(seq_len, window_size)
-        return [self._mask_cache[(seq_len, window_size)] for window_size in self.window_sizes]
+                    self._mask_cache[key] = create_sliding_window_mask(
+                        seq_len, window_size
+                    )
+        return [
+            self._mask_cache[(seq_len, window_size)]
+            for window_size in self.window_sizes
+        ]
 
     def __call__(self, idx, targets=None, reduction="mean"):
         _, seq_len = idx.shape
@@ -231,7 +260,16 @@ class GPT(nn.Module):
 
 
 class AdamW:
-    def __init__(self, model, unembedding_lr, embedding_lr, matrix_lr, weight_decay, adam_betas, scalar_lr):
+    def __init__(
+        self,
+        model,
+        unembedding_lr,
+        embedding_lr,
+        matrix_lr,
+        weight_decay,
+        adam_betas,
+        scalar_lr,
+    ):
         self.param_config = {}
         self.adam_state = {}
 
@@ -247,14 +285,7 @@ class AdamW:
                     "eps": 1e-10,
                     "weight_decay": weight_decay,
                 }
-            elif "wte" in path:
-                self.param_config[path] = {
-                    "lr": embedding_lr * dmodel_lr_scale,
-                    "betas": adam_betas,
-                    "eps": 1e-10,
-                    "weight_decay": 0.0,
-                }
-            elif "value_embeds" in path:
+            elif "wte" in path or "value_embeds" in path:
                 self.param_config[path] = {
                     "lr": embedding_lr * dmodel_lr_scale,
                     "betas": adam_betas,
@@ -290,7 +321,9 @@ class AdamW:
                     "weight_decay": 0.0,
                 }
 
-        self.initial_lrs = {path: config["lr"] for path, config in self.param_config.items()}
+        self.initial_lrs = {
+            path: config["lr"] for path, config in self.param_config.items()
+        }
 
     def _set_path_value(self, model, path, value):
         parts = path.split(".")
@@ -438,7 +471,9 @@ optimizer = AdamW(
     scalar_lr=SCALAR_LR,
 )
 
-loss_grad_fn = nn.value_and_grad(model, lambda model, inputs, targets: model(inputs, targets=targets))
+loss_grad_fn = nn.value_and_grad(
+    model, lambda model, inputs, targets: model(inputs, targets=targets)
+)
 
 print(f"Time budget: {TIME_BUDGET}s")
 print(f"Gradient accumulation steps: {grad_accum_steps}")
@@ -467,7 +502,9 @@ while True:
         x, y, epoch = next(train_loader)
 
     if grad_accum_steps > 1:
-        accum_grads = tree_map(lambda grad: grad * (1.0 / grad_accum_steps), accum_grads)
+        accum_grads = tree_map(
+            lambda grad: grad * (1.0 / grad_accum_steps), accum_grads
+        )
 
     progress = min(total_training_time / TIME_BUDGET, 1.0)
     lrm = get_lr_multiplier(progress)
@@ -493,7 +530,7 @@ while True:
 
     print(
         f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased_smooth_loss:.6f} | "
-        f"lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | "
+        f"lrm: {lrm:.2f} | dt: {dt * 1000:.0f}ms | tok/sec: {tok_per_sec:,} | "
         f"epoch: {epoch} | remaining: {remaining:.0f}s    ",
         end="",
         flush=True,
