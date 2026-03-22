@@ -11,6 +11,9 @@ __pycache__/
 run.log
 run_snn.log
 
+# Vendored / cloned upstream repos
+spyx/
+
 # Generated local experiment / smoke outputs
 _depth_*_smoke/
 _esim_*_smoke/
