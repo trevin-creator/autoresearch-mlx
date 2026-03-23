@@ -57,6 +57,23 @@ def get_peak_memory_mb():
     return mx.get_peak_memory() / 1024 / 1024
 
 
+def evaluate_bpb_with_backoff(model, tokenizer, batch_size):
+    eval_batch_size = batch_size
+    while True:
+        print(f"Final eval batch size: {eval_batch_size}")
+        try:
+            return evaluate_bpb(model, tokenizer, eval_batch_size), eval_batch_size
+        except RuntimeError as exc:
+            message = str(exc)
+            is_metal_oom = "metal::malloc" in message or "maximum allowed buffer size" in message
+            if not is_metal_oom or eval_batch_size == 1:
+                raise
+            next_batch_size = max(1, eval_batch_size // 2)
+            print(f"Final eval OOM at batch size {eval_batch_size}, retrying with {next_batch_size}")
+            gc.collect()
+            eval_batch_size = next_batch_size
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
@@ -506,8 +523,7 @@ print(f"Training completed in {t_train - t_compiled:.1f}s")
 
 total_tokens = step * TOTAL_BATCH_SIZE
 print("Starting final eval...")
-print(f"Final eval batch size: {FINAL_EVAL_BATCH_SIZE}")
-val_bpb = evaluate_bpb(model, tokenizer, FINAL_EVAL_BATCH_SIZE)
+val_bpb, final_eval_batch_size = evaluate_bpb_with_backoff(model, tokenizer, FINAL_EVAL_BATCH_SIZE)
 t_eval = time.time()
 print(f"Final eval completed in {t_eval - t_train:.1f}s")
 
@@ -519,6 +535,7 @@ print(f"val_bpb:          {val_bpb:.6f}")
 print(f"training_seconds: {total_training_time:.1f}")
 print(f"total_seconds:    {t_eval - t_start:.1f}")
 print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
+print(f"final_eval_batch: {final_eval_batch_size}")
 print(f"mfu_percent:      {steady_state_mfu:.2f}")
 print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
 print(f"num_steps:        {step}")
