@@ -8,3 +8,4 @@ c67ad2a	2.695369	26.9	discard	lower weight decay to 0.1
 b8877be	2.182068	10.6843	keep	reduce depth 4 -> 3 (improved)
 0287970	2.179408	10.6843	keep	window pattern SSSL -> SSSS (marginal improvement)
 706a704	2.150233	13.1981	keep	reduce head dim 128 -> 96 (improved)
+a302b7f	2.057376	13.1718	keep	reduce depth 3 -> 2 (big improvement)
