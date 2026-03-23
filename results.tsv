@@ -25,3 +25,5 @@ f816b32	1.615656	3.0	keep	reduce warmdown from 0.5 to 0.3
 acba696	1.538177	3.1	keep	15-min baseline with current best config
 7f839dc	1.545368	3.2	discard	depth 3 with 15-min budget
 71a60d8	1.532454	3.1	keep	batch 2^14 with 15-min budget
+afb6489	1.603610	3.0	discard	warmdown 0.3 with 15-min budget
+db01dd8	1.524609	3.0	keep	SwiGLU hidden 3x n_embd with 15-min budget
