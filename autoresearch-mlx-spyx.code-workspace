@@ -1,0 +1,18 @@
+{
+  "folders": [
+    {
+      "name": "autoresearch-mlx",
+      "path": "."
+    },
+    {
+      "name": "spyx",
+      "path": "../spyx"
+    }
+  ],
+  "settings": {
+    "python.analysis.extraPaths": [
+      "${workspaceFolder:autoresearch-mlx}/spyx/src",
+      "${workspaceFolder:spyx}/src"
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+[submodule "spyx"]
+	path = spyx
+	url = https://github.com/kmheckel/spyx.git
