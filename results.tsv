@@ -29,3 +29,4 @@ afb6489	1.603610	3.0	discard	warmdown 0.3 with 15-min budget
 db01dd8	1.524609	3.0	keep	SwiGLU hidden 3x n_embd with 15-min budget
 78ea8a6	1.617200	3.1	discard	SwiGLU hidden 4x n_embd
 8f0d717	1.482036	3.0	keep	remove logit cap with 15-min budget
+4c97728	1.510121	3.0	discard	5% warmup with 15-min budget no cap
