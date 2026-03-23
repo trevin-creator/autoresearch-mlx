@@ -54,3 +54,9 @@ Second-wave templates now implemented:
 Benchmark hooks now implemented:
 - spyx/src/spyx/fpga_models.py: count_parameters
 - spyx/src/spyx/fpga_models.py: benchmark_forward
+
+Third-wave templates now implemented:
+- spyx/src/spyx/fpga_models.py: ResidualShallowSpikingCNN
+- spyx/src/spyx/fpga_models.py: MultiTimescaleLIFBlock
+- spyx/src/spyx/fpga_models.py: TinyRecurrentSpikingBlock
+- spyx/src/spyx/fpga_models.py: HybridSNNEncoderHead
