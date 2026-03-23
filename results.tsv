@@ -23,3 +23,5 @@ f816b32	1.615656	3.0	keep	reduce warmdown from 0.5 to 0.3
 8694243	1.610015	3.0	keep	final LR frac 0.15
 4bf1a53	1.717273	3.0	discard	small nonzero init for c_proj instead of zero
 acba696	1.538177	3.1	keep	15-min baseline with current best config
+7f839dc	1.545368	3.2	discard	depth 3 with 15-min budget
+71a60d8	1.532454	3.1	keep	batch 2^14 with 15-min budget
