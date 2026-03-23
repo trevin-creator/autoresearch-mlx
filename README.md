@@ -33,3 +33,16 @@ Open `/Users/vincent/Work/neuromorph.code-workspace` to work across the split re
 - `spyx_mlx` duplication was removed in favor of the `spyx` fork
 
 This repo is no longer the active development target.
+
+## FPGA SNN Implementation Status
+
+Active implementation now lives in the spyx submodule.
+
+Implemented first-wave templates:
+- spyx/src/spyx/fpga_models.py: LIFMLP
+- spyx/src/spyx/fpga_models.py: ConvLIFSNN
+- spyx/src/spyx/fpga_models.py: TernaryLIFMLP
+- spyx/src/spyx/fpga_models.py: TernaryConvLIFSNN
+
+Smoke tests:
+- spyx/tests/test_fpga_models.py
