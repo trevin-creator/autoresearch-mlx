@@ -46,3 +46,11 @@ Implemented first-wave templates:
 
 Smoke tests:
 - spyx/tests/test_fpga_models.py
+
+Second-wave templates now implemented:
+- spyx/src/spyx/fpga_models.py: SparseEventConvLIFSNN
+- spyx/src/spyx/fpga_models.py: DepthwiseSeparableConvLIFSNN
+
+Benchmark hooks now implemented:
+- spyx/src/spyx/fpga_models.py: count_parameters
+- spyx/src/spyx/fpga_models.py: benchmark_forward
