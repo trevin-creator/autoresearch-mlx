@@ -5,3 +5,5 @@ c67ad2a	2.695369	26.9	discard	lower weight decay to 0.1
 4161af3	2.533728	26.9	keep	increase matrix LR to 0.04
 5efc7aa	1.807902	20.7	keep	reduce depth from 8 to 4
 01f4e8a	2.253558	10.7655	keep	M4 baseline with OOM backoff fix
+b8877be	2.182068	10.6843	keep	reduce depth 4 -> 3 (improved)
+0287970	2.179408	10.6843	keep	window pattern SSSL -> SSSS (marginal improvement)
