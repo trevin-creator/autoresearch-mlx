@@ -16,6 +16,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sequence-len", type=int, default=16)
     p.add_argument("--feature-dim", type=int, default=79)
     p.add_argument("--action-noise", type=float, default=0.2)
+    p.add_argument("--wind-std", type=float, default=0.0)
+    p.add_argument("--actuation-noise-std", type=float, default=0.0)
+    p.add_argument("--latency-steps", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
@@ -61,6 +64,7 @@ def build_dataset(args: argparse.Namespace) -> Path:
 
     for _ in range(args.num_sequences):
         sim = QuadMotorDynamics(domain_randomized_config(rng))
+        cmd_queue: list[np.ndarray] = []
 
         feat_list = []
         action_proxy_list = []
@@ -77,7 +81,27 @@ def build_dataset(args: argparse.Namespace) -> Path:
             cmd = np.clip(prev_cmd + rng.normal(0.0, args.action_noise, size=4).astype(np.float32), -1.0, 1.0)
             prev_cmd = 0.85 * prev_cmd + 0.15 * cmd
 
-            out = sim.step(cmd)
+            applied = cmd.astype(np.float32)
+            if args.actuation_noise_std > 0.0:
+                applied = np.clip(
+                    applied + rng.normal(0.0, args.actuation_noise_std, size=4).astype(np.float32),
+                    -1.0,
+                    1.0,
+                )
+
+            if args.latency_steps > 0:
+                cmd_queue.append(applied)
+                if len(cmd_queue) <= args.latency_steps:
+                    applied = np.zeros(4, dtype=np.float32)
+                else:
+                    applied = cmd_queue.pop(0)
+
+            out = sim.step(applied)
+
+            if args.wind_std > 0.0:
+                sim.state.velocity = sim.state.velocity + rng.normal(0.0, args.wind_std, size=3).astype(np.float32) * sim.cfg.dt
+                sim.state.position = sim.state.position + sim.state.velocity * sim.cfg.dt
+                out["pose"][:3] = sim.state.position.astype(np.float32)
             pose = out["pose"]
             pose_delta = out["pose_delta"]
             motors = out["motors"]
@@ -92,7 +116,7 @@ def build_dataset(args: argparse.Namespace) -> Path:
 
             feat_list.append(feat)
             action_proxy_list.append(action_proxy)
-            motor_list.append(cmd.astype(np.float32))
+            motor_list.append(applied.astype(np.float32))
             pose_list.append(pose.astype(np.float32))
             pose_delta_list.append(pose_delta.astype(np.float32))
             reward_list.append(np.float32(out["reward"]))

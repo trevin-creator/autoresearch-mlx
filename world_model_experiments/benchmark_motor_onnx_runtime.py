@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--timed-runs", type=int, default=20)
     p.add_argument("--csv-output", type=str, default="")
     p.add_argument("--tag", type=str, default="")
+    p.add_argument("--repeats", type=int, default=1)
     return p.parse_args()
 
 
@@ -80,46 +81,67 @@ def main() -> None:
     sess = ort.InferenceSession(str(out_path), providers=["CPUExecutionProvider"])
 
     n = min(args.batches, features.shape[0])
-    lat_ms: list[float] = []
-    max_abs: list[float] = []
-    mean_abs: list[float] = []
+    all_lat_ms: list[float] = []
+    all_max_abs: list[float] = []
+    all_mean_abs: list[float] = []
+    repeat_rows: list[dict[str, float]] = []
 
-    for i in range(n):
-        feat_i = features[i : i + 1]
-        act_i = actions[i : i + 1]
+    for rep in range(max(1, args.repeats)):
+        lat_ms: list[float] = []
+        max_abs: list[float] = []
+        mean_abs: list[float] = []
 
-        with torch.no_grad():
-            feat_t = torch.from_numpy(feat_i)
-            act_t = torch.from_numpy(act_i)
-            enc = model.encode(feat_t, act_t)
-            pt = model.predict(enc["emb"], enc["act_emb"]).cpu().numpy()
+        for i in range(n):
+            idx = (rep * n + i) % features.shape[0]
+            feat_i = features[idx : idx + 1]
+            act_i = actions[idx : idx + 1]
 
-        for _ in range(max(0, args.warmup_runs)):
-            sess.run(None, {"features": feat_i, "actions": act_i})
+            with torch.no_grad():
+                feat_t = torch.from_numpy(feat_i)
+                act_t = torch.from_numpy(act_i)
+                enc = model.encode(feat_t, act_t)
+                pt = model.predict(enc["emb"], enc["act_emb"]).cpu().numpy()
 
-        timed = max(1, args.timed_runs)
-        t0 = time.perf_counter()
-        ort_raw = None
-        for _ in range(timed):
-            ort_raw = sess.run(None, {"features": feat_i, "actions": act_i})[0]
-        t1 = time.perf_counter()
-        ort_out = cast(np.ndarray[Any, Any], ort_raw)
-        lat_ms.append(((t1 - t0) * 1000.0) / timed)
+            for _ in range(max(0, args.warmup_runs)):
+                sess.run(None, {"features": feat_i, "actions": act_i})
 
-        d = np.abs(pt - ort_out)
-        max_abs.append(float(d.max()))
-        mean_abs.append(float(d.mean()))
+            timed = max(1, args.timed_runs)
+            t0 = time.perf_counter()
+            ort_raw = None
+            for _ in range(timed):
+                ort_raw = sess.run(None, {"features": feat_i, "actions": act_i})[0]
+            t1 = time.perf_counter()
+            ort_out = cast(np.ndarray[Any, Any], ort_raw)
+            lat_ms.append(((t1 - t0) * 1000.0) / timed)
+
+            d = np.abs(pt - ort_out)
+            max_abs.append(float(d.max()))
+            mean_abs.append(float(d.mean()))
+
+        all_lat_ms.extend(lat_ms)
+        all_max_abs.extend(max_abs)
+        all_mean_abs.extend(mean_abs)
+        repeat_rows.append(
+            {
+                "repeat": float(rep),
+                "latency_ms_mean": float(np.mean(lat_ms)) if lat_ms else 0.0,
+                "latency_ms_p95": float(np.percentile(lat_ms, 95)) if lat_ms else 0.0,
+                "latency_ms_jitter_std": float(np.std(lat_ms)) if lat_ms else 0.0,
+                "parity_max_abs_mean": float(np.mean(max_abs)) if max_abs else 0.0,
+            }
+        )
 
     result = {
         "batches": float(n),
+        "repeats": float(max(1, args.repeats)),
         "warmup_runs": float(max(0, args.warmup_runs)),
         "timed_runs": float(max(1, args.timed_runs)),
-        "latency_ms_mean": float(np.mean(lat_ms)) if lat_ms else 0.0,
-        "latency_ms_p95": float(np.percentile(lat_ms, 95)) if lat_ms else 0.0,
-        "latency_ms_jitter_std": float(np.std(lat_ms)) if lat_ms else 0.0,
-        "parity_max_abs_mean": float(np.mean(max_abs)) if max_abs else 0.0,
-        "parity_mean_abs_mean": float(np.mean(mean_abs)) if mean_abs else 0.0,
-        "parity_allclose_1e-4_rate": float(np.mean([x <= 1e-4 for x in max_abs])) if max_abs else 0.0,
+        "latency_ms_mean": float(np.mean(all_lat_ms)) if all_lat_ms else 0.0,
+        "latency_ms_p95": float(np.percentile(all_lat_ms, 95)) if all_lat_ms else 0.0,
+        "latency_ms_jitter_std": float(np.std(all_lat_ms)) if all_lat_ms else 0.0,
+        "parity_max_abs_mean": float(np.mean(all_max_abs)) if all_max_abs else 0.0,
+        "parity_mean_abs_mean": float(np.mean(all_mean_abs)) if all_mean_abs else 0.0,
+        "parity_allclose_1e-4_rate": float(np.mean([x <= 1e-4 for x in all_max_abs])) if all_max_abs else 0.0,
     }
 
     if args.csv_output:
@@ -128,6 +150,7 @@ def main() -> None:
         fieldnames = [
             "tag",
             "batches",
+            "repeats",
             "warmup_runs",
             "timed_runs",
             "latency_ms_mean",
@@ -145,6 +168,16 @@ def main() -> None:
             row = {k: result[k] for k in fieldnames if k != "tag"}
             row["tag"] = args.tag
             w.writerow(row)
+
+        rep_path = csv_path.with_name(csv_path.stem + "_repeats.csv")
+        rep_fieldnames = ["tag", "repeat", "latency_ms_mean", "latency_ms_p95", "latency_ms_jitter_std", "parity_max_abs_mean"]
+        write_rep_header = not rep_path.exists()
+        with rep_path.open("a", newline="") as rf:
+            rw = csv.DictWriter(rf, fieldnames=rep_fieldnames)
+            if write_rep_header:
+                rw.writeheader()
+            for r in repeat_rows:
+                rw.writerow({"tag": args.tag, **{k: r[k] for k in rep_fieldnames if k != "tag"}})
 
     print("runtime_benchmark", json.dumps(result, sort_keys=True))
 

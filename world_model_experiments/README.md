@@ -34,6 +34,10 @@ This folder provides a practical scaffold for your requested stack:
 - `run_motor_robustness_report.py`: per-seed robustness aggregator that writes CSV/Markdown artifacts.
 - `benchmark_motor_onnx_runtime.py`: runtime latency/jitter and parity stress benchmark for ONNXRuntime.
 - `check_phase35_gates.py`: fail-fast metric gates for closed-loop safety, robustness, and runtime/parity checks.
+- `safety_shield.py`: runtime safety shield for bounded, slew-limited, emergency-stopped motor commands.
+- `run_motor_curriculum_train.py`: staged disturbance curriculum training runner for motor-mode informed Dreamer.
+- `validate_real_replay.py`: replay parity validator (predicted vs observed pose_delta/reward) with speed buckets.
+- `check_phase4_release_gates.py`: stricter release-grade gate checker across safety, robustness, runtime, parity, replay.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -297,6 +301,66 @@ python -m world_model_experiments.check_phase35_gates \
   --min-survival 0.85 \
   --max-latency-p95-ms 8.0 \
   --max-parity-diff 1e-4
+
+python -m world_model_experiments.run_motor_curriculum_train \
+  --output-root artifacts/sim/motor_curriculum \
+  --num-sequences 64 \
+  --sequence-len 16 \
+  --epochs-per-stage 2 \
+  --batch-size 16 \
+  --seed 0
+
+python -m world_model_experiments.evaluate_closed_loop_motor \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --episodes 8 \
+  --horizon 16 \
+  --use-motor-commands \
+  --use-safety-shield
+
+python -m world_model_experiments.evaluate_motor_robustness \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --episodes 8 \
+  --horizon 8 \
+  --scenario-mode matrix \
+  --wind-stds 0.0,0.5,1.0 \
+  --act-noise-stds 0.0,0.08,0.16 \
+  --latency-steps 0,1,2 \
+  --use-motor-commands \
+  --use-safety-shield
+
+python -m world_model_experiments.benchmark_motor_onnx_runtime \
+  --checkpoint artifacts/sim/feature_lewm_motor/feature_lewm_best.pt \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --output artifacts/sim/feature_lewm_motor/feature_lewm_motor_runtime.onnx \
+  --batches 16 \
+  --warmup-runs 5 \
+  --timed-runs 20 \
+  --repeats 3 \
+  --csv-output artifacts/sim/feature_lewm_motor/runtime_trend.csv \
+  --tag release \
+  --use-motor-commands
+
+python -m world_model_experiments.validate_real_replay \
+  --dataset artifacts/tumvie/tumvie_features.h5 \
+  --checkpoint artifacts/tumvie/informed_dreamer/informed_dreamer_best.pt \
+  --use-flight-plan
+
+python -m world_model_experiments.check_phase4_release_gates \
+  --closed-loop-log /tmp/release_closed_loop.log \
+  --robust-log /tmp/release_robust.log \
+  --runtime-log /tmp/release_runtime.log \
+  --onnx-log /tmp/release_onnx.log \
+  --replay-log /tmp/release_replay.log \
+  --max-crash-rate 0.01 \
+  --max-termination-rate 0.01 \
+  --min-survival 0.95 \
+  --max-latency-p95-ms 6.0 \
+  --max-parity-diff 1e-4 \
+  --max-replay-pose-delta-mse 0.01 \
+  --max-replay-reward-mse 0.02 \
+  --max-shield-emergency-rate 0.01
 ```
 
 ## Integrating real Tonic stereo+IMU data

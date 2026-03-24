@@ -9,6 +9,7 @@ import torch
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
+from world_model_experiments.safety_shield import SafetyShieldConfig, apply_safety_shield
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,6 +23,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--use-flight-plan", action="store_true")
+    p.add_argument("--use-safety-shield", action="store_true")
+    p.add_argument("--shield-max-slew", type=float, default=0.2)
+    p.add_argument("--shield-max-abs-cmd", type=float, default=1.0)
+    p.add_argument("--shield-emergency-stop-norm", type=float, default=30.0)
     return p.parse_args()
 
 
@@ -60,6 +65,8 @@ def main() -> None:
     crash_flags = []
     rollout_survival = []
     pose_errors = []
+    shield_modified = []
+    shield_emergency = []
 
     for ep in range(n_eps):
         feat_seq = torch.from_numpy(features[ep : ep + 1])
@@ -80,6 +87,14 @@ def main() -> None:
         crashed = False
         ep_pose_err = []
         survived_steps = 0
+        ep_shield_modified = 0.0
+        ep_shield_emergency = 0.0
+
+        shield_cfg = SafetyShieldConfig(
+            max_slew=args.shield_max_slew,
+            max_abs_cmd=args.shield_max_abs_cmd,
+            emergency_stop_norm=args.shield_emergency_stop_norm,
+        )
 
         for _ in range(args.horizon):
             with torch.no_grad():
@@ -98,6 +113,11 @@ def main() -> None:
 
             # For motor-mode, first 4 dimensions are motor commands.
             motor_cmd = action[0, :4].detach().cpu().numpy().astype(np.float32)
+            if args.use_safety_shield:
+                state_norm = float(np.linalg.norm(sim.state.position) + np.linalg.norm(sim.state.euler))
+                motor_cmd, shield = apply_safety_shield(motor_cmd, prev, state_norm, shield_cfg)
+                ep_shield_modified += float(shield["modified"])
+                ep_shield_emergency += float(shield["emergency_stop"])
             out = sim.step(motor_cmd)
 
             ep_reward += float(out["reward"])
@@ -125,6 +145,8 @@ def main() -> None:
         crash_flags.append(1.0 if crashed else 0.0)
         rollout_survival.append(float(survived_steps / max(1, args.horizon)))
         pose_errors.append(float(np.mean(ep_pose_err)) if ep_pose_err else 0.0)
+        shield_modified.append(ep_shield_modified / max(1, args.horizon))
+        shield_emergency.append(ep_shield_emergency / max(1, args.horizon))
 
     result = {
         "episodes": float(n_eps),
@@ -136,6 +158,8 @@ def main() -> None:
         "termination_rate": float(np.mean(crash_flags)) if crash_flags else 0.0,
         "rollout_survival_mean": float(np.mean(rollout_survival)) if rollout_survival else 0.0,
         "pose_mse_sim_mean": float(np.mean(pose_errors)) if pose_errors else 0.0,
+        "shield_modified_rate": float(np.mean(shield_modified)) if shield_modified else 0.0,
+        "shield_emergency_rate": float(np.mean(shield_emergency)) if shield_emergency else 0.0,
     }
     print("closed_loop_eval", result)
 

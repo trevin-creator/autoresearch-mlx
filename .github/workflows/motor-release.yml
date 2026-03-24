@@ -1,0 +1,152 @@
+name: Motor Release Gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - world_model_experiments/**
+      - .github/workflows/motor-release.yml
+
+jobs:
+  motor-release-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy h5py torch onnx onnxruntime
+
+      - name: Build release-grade simulator dataset
+        run: |
+          python -m world_model_experiments.build_sim_rollout_dataset \
+            --output /tmp/release_sim_motor_rollouts.h5 \
+            --num-sequences 96 \
+            --sequence-len 12 \
+            --feature-dim 79 \
+            --action-noise 0.22 \
+            --wind-std 0.5 \
+            --actuation-noise-std 0.08 \
+            --latency-steps 1 \
+            --seed 0
+
+      - name: Train release feature JEPA
+        run: |
+          python -m world_model_experiments.train_feature_lewm \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --output-dir /tmp/release_feature_lewm_motor \
+            --epochs 2 \
+            --batch-size 16 \
+            --history-size 4 \
+            --embed-dim 32 \
+            --hidden-dim 64 \
+            --depth 1 \
+            --heads 4 \
+            --use-motor-commands
+
+      - name: Train release informed Dreamer
+        run: |
+          python -m world_model_experiments.train_informed_dreamer \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --output-dir /tmp/release_informed_dreamer_motor \
+            --epochs 2 \
+            --batch-size 16 \
+            --embed-dim 64 \
+            --hidden-dim 128 \
+            --horizon 8 \
+            --use-motor-commands
+
+      - name: Closed-loop safety eval
+        run: |
+          python -m world_model_experiments.evaluate_closed_loop_motor \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
+            --episodes 8 \
+            --horizon 8 \
+            --use-motor-commands \
+            --use-safety-shield | tee /tmp/release_closed_loop.log
+
+      - name: Robustness matrix eval
+        run: |
+          python -m world_model_experiments.evaluate_motor_robustness \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
+            --episodes 6 \
+            --horizon 8 \
+            --scenario-mode matrix \
+            --wind-stds 0.0,0.5,1.0 \
+            --act-noise-stds 0.0,0.08,0.16 \
+            --latency-steps 0,1,2 \
+            --use-motor-commands \
+            --use-safety-shield | tee /tmp/release_robust.log
+
+      - name: ONNX parity check
+        run: |
+          python -m world_model_experiments.validate_motor_onnx_parity \
+            --checkpoint /tmp/release_feature_lewm_motor/feature_lewm_best.pt \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --output /tmp/release_feature_lewm_motor.onnx \
+            --use-motor-commands | tee /tmp/release_onnx.log
+
+      - name: Runtime hardware-style benchmark
+        run: |
+          python -m world_model_experiments.benchmark_motor_onnx_runtime \
+            --checkpoint /tmp/release_feature_lewm_motor/feature_lewm_best.pt \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --output /tmp/release_feature_lewm_runtime.onnx \
+            --batches 12 \
+            --warmup-runs 5 \
+            --timed-runs 20 \
+            --repeats 3 \
+            --csv-output /tmp/release_runtime_trend.csv \
+            --tag release \
+            --use-motor-commands | tee /tmp/release_runtime.log
+
+      - name: Replay parity validation
+        run: |
+          python -m world_model_experiments.validate_real_replay \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
+            --use-motor-commands | tee /tmp/release_replay.log
+
+      - name: Enforce release gates
+        run: |
+          python -m world_model_experiments.check_phase4_release_gates \
+            --closed-loop-log /tmp/release_closed_loop.log \
+            --robust-log /tmp/release_robust.log \
+            --runtime-log /tmp/release_runtime.log \
+            --onnx-log /tmp/release_onnx.log \
+            --replay-log /tmp/release_replay.log \
+            --max-crash-rate 0.01 \
+            --max-termination-rate 0.01 \
+            --min-survival 0.95 \
+            --max-latency-p95-ms 6.0 \
+            --max-parity-diff 1e-4 \
+            --max-replay-pose-delta-mse 0.01 \
+            --max-replay-reward-mse 0.02 \
+            --max-shield-emergency-rate 0.01
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: motor-release-artifacts
+          path: |
+            /tmp/release_closed_loop.log
+            /tmp/release_robust.log
+            /tmp/release_onnx.log
+            /tmp/release_runtime.log
+            /tmp/release_replay.log
+            /tmp/release_runtime_trend.csv
+            /tmp/release_runtime_trend_repeats.csv
+            /tmp/release_feature_lewm_runtime.onnx

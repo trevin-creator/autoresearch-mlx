@@ -11,6 +11,7 @@ import torch
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
+from world_model_experiments.safety_shield import SafetyShieldConfig, apply_safety_shield
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,6 +29,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wind-stds", type=str, default="0.0,0.5,1.0")
     p.add_argument("--act-noise-stds", type=str, default="0.0,0.05,0.12")
     p.add_argument("--latency-steps", type=str, default="0,1,2")
+    p.add_argument("--use-safety-shield", action="store_true")
+    p.add_argument("--shield-max-slew", type=float, default=0.2)
+    p.add_argument("--shield-max-abs-cmd", type=float, default=1.0)
+    p.add_argument("--shield-emergency-stop-norm", type=float, default=30.0)
     return p.parse_args()
 
 
@@ -93,6 +98,8 @@ def _evaluate_scenario(
     action_energy = []
     crash_flags = []
     rollout_survival = []
+    shield_modified = []
+    shield_emergency = []
 
     latency_steps = int(scenario["latency_steps"])
     wind_std = float(scenario["wind_std"])
@@ -118,6 +125,14 @@ def _evaluate_scenario(
         ep_energy = []
         crashed = False
         survived_steps = 0
+        ep_shield_modified = 0.0
+        ep_shield_emergency = 0.0
+
+        shield_cfg = SafetyShieldConfig(
+            max_slew=args.shield_max_slew,
+            max_abs_cmd=args.shield_max_abs_cmd,
+            emergency_stop_norm=args.shield_emergency_stop_norm,
+        )
 
         for _ in range(args.horizon):
             with torch.no_grad():
@@ -148,6 +163,12 @@ def _evaluate_scenario(
             else:
                 applied = cmd
 
+            if args.use_safety_shield:
+                state_norm = float(np.linalg.norm(sim.state.position) + np.linalg.norm(sim.state.euler))
+                applied, shield = apply_safety_shield(applied, prev, state_norm, shield_cfg)
+                ep_shield_modified += float(shield["modified"])
+                ep_shield_emergency += float(shield["emergency_stop"])
+
             out = sim.step(applied)
 
             # Disturb translational state to emulate wind/gust impulses.
@@ -177,6 +198,8 @@ def _evaluate_scenario(
         action_energy.append(float(np.mean(ep_energy)) if ep_energy else 0.0)
         crash_flags.append(1.0 if crashed else 0.0)
         rollout_survival.append(float(survived_steps / max(1, args.horizon)))
+        shield_modified.append(ep_shield_modified / max(1, args.horizon))
+        shield_emergency.append(ep_shield_emergency / max(1, args.horizon))
 
     return {
         "episodes": float(n_eps),
@@ -187,6 +210,8 @@ def _evaluate_scenario(
         "crash_rate": float(np.mean(crash_flags)) if crash_flags else 0.0,
         "termination_rate": float(np.mean(crash_flags)) if crash_flags else 0.0,
         "rollout_survival_mean": float(np.mean(rollout_survival)) if rollout_survival else 0.0,
+        "shield_modified_rate": float(np.mean(shield_modified)) if shield_modified else 0.0,
+        "shield_emergency_rate": float(np.mean(shield_emergency)) if shield_emergency else 0.0,
     }
 
 
