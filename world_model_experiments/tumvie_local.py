@@ -259,6 +259,8 @@ def build_tumvie_feature_dataset(
     seq_pose_delta = []
     seq_timestamps = []
     seq_flight_plan = []
+    seq_reward = []
+    seq_continue = []
     for start in range(0, len(features_per_window) - sequence_len + 1, sequence_len):
         end = start + sequence_len
         seq_features.append(np.stack(features_per_window[start:end], axis=0))
@@ -267,6 +269,15 @@ def build_tumvie_feature_dataset(
         seq_pose_delta.append(np.stack(pose_delta_per_window[start:end], axis=0))
         seq_timestamps.append(np.asarray(timestamps_per_window[start:end], dtype=np.int64))
         seq_flight_plan.append(np.stack(flight_plan_per_window[start:end], axis=0))
+
+        deltas = np.stack(pose_delta_per_window[start:end], axis=0)
+        transl = np.linalg.norm(deltas[:, :3], axis=-1)
+        yaw_prog = deltas[:, 5]
+        reward = (0.8 * transl + 0.2 * np.abs(yaw_prog)).astype(np.float32)
+        cont = np.ones((sequence_len,), dtype=np.float32)
+        cont[-1] = 0.0
+        seq_reward.append(reward)
+        seq_continue.append(cont)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -277,4 +288,6 @@ def build_tumvie_feature_dataset(
         h5.create_dataset("pose_delta", data=np.stack(seq_pose_delta, axis=0), compression="gzip")
         h5.create_dataset("timestamps_us", data=np.stack(seq_timestamps, axis=0), compression="gzip")
         h5.create_dataset("flight_plan", data=np.stack(seq_flight_plan, axis=0), compression="gzip")
+        h5.create_dataset("reward", data=np.stack(seq_reward, axis=0), compression="gzip")
+        h5.create_dataset("continue", data=np.stack(seq_continue, axis=0), compression="gzip")
     return output

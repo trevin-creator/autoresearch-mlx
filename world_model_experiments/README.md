@@ -19,6 +19,9 @@ This folder provides a practical scaffold for your requested stack:
 - `tumvie_local.py`: local TUMVIE event/IMU reader for the existing dataset files in this repo.
 - `build_tumvie_feature_dataset.py`: CLI to generate feature/action HDF5 from real TUMVIE windows.
 - `evaluate_tumvie_probe.py`: linear probe that tests whether the learned embedding predicts real pose deltas.
+- `informed_dreamer_model.py`: informed world model + reward/continue heads + actor-critic with smooth action regularization.
+- `train_informed_dreamer.py`: end-to-end training for the full informed Dreamer-style stack.
+- `evaluate_informed_dreamer.py`: evaluates privileged decoder and reward/continue prediction errors.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -105,6 +108,9 @@ Adaptation from SkyDreamer:
   (position + yaw) over a configurable horizon.
 - This vector is stored as `flight_plan` in the dataset and can be concatenated to
   `actions` during training and probing using `--use-flight-plan`.
+- We add informed decoder targets (`pose`, `pose_delta`) plus `reward` and
+  `continue` heads to train latent imagination with actor-critic.
+- We apply smoothness regularization on actor action means during imagined rollouts.
 
 ```bash
 python -m world_model_experiments.build_tumvie_feature_dataset \
@@ -144,6 +150,27 @@ The generated TUMVIE HDF5 now includes:
 - `pose_delta`: aligned pose change between accepted windows
 - `timestamps_us`: original recording timestamps
 - `flight_plan`: future relative+absolute waypoint summary (SkyDreamer-style adaptation)
+- `reward`: progress proxy derived from pose delta
+- `continue`: continuation target for imagined rollouts
+
+## Full informed-dreamer run (paper-adapted)
+
+```bash
+python -m world_model_experiments.train_informed_dreamer \
+  --dataset artifacts/tumvie/tumvie_features.h5 \
+  --output-dir artifacts/tumvie/informed_dreamer \
+  --epochs 5 \
+  --batch-size 8 \
+  --embed-dim 128 \
+  --hidden-dim 192 \
+  --horizon 8 \
+  --use-flight-plan
+
+python -m world_model_experiments.evaluate_informed_dreamer \
+  --dataset artifacts/tumvie/tumvie_features.h5 \
+  --checkpoint artifacts/tumvie/informed_dreamer/informed_dreamer_best.pt \
+  --use-flight-plan
+```
 
 ## Integrating real Tonic stereo+IMU data
 
