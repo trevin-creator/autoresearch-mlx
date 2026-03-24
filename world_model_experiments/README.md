@@ -43,6 +43,9 @@ This folder provides a practical scaffold for your requested stack:
 - `evaluate_ood_guard.py`: feature-distribution OOD detector and fallback trigger-rate estimator.
 - `fit_motor_dynamics.py`: coarse system-identification utility for motor-to-motion gains and delay.
 - `generate_verification_matrix.py`: requirement-to-evidence markdown matrix generator from release logs.
+- `fallback_controller.py`: conservative low-authority hover/land fallback controller.
+- `autopilot_bridge.py`: planner/fallback arbitration plus safety shield and PWM command packet bridge.
+- `run_shadow_mode_replay.py`: replay planner outputs in shadow mode with fallback arbitration and command packets.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -387,10 +390,31 @@ python -m world_model_experiments.generate_verification_matrix \
   --robust-log /tmp/release_robust.log \
   --runtime-log /tmp/release_runtime.log \
   --replay-log /tmp/release_replay.log \
+  --shadow-log /tmp/release_shadow.log \
   --sync-log /tmp/release_sync.log \
   --ood-log /tmp/release_ood.log \
   --system-id-log /tmp/release_system_id.log \
   --output artifacts/sim/verification/phase5_verification_matrix.md
+
+python -m world_model_experiments.run_shadow_mode_replay \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --episodes 8 \
+  --ood-threshold 0.10 \
+  --use-motor-commands
+
+python -m world_model_experiments.check_phase4_release_gates \
+  --closed-loop-log /tmp/release_closed_loop.log \
+  --robust-log /tmp/release_robust.log \
+  --runtime-log /tmp/release_runtime.log \
+  --onnx-log /tmp/release_onnx.log \
+  --replay-log /tmp/release_replay.log \
+  --shadow-log /tmp/release_shadow.log \
+  --sync-log /tmp/release_sync.log \
+  --ood-log /tmp/release_ood.log \
+  --system-id-log /tmp/release_system_id.log \
+  --max-shadow-fallback-rate 0.50 \
+  --max-shadow-emergency-rate 0.01
 ```
 
 ## Integrating real Tonic stereo+IMU data

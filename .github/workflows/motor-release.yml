@@ -119,6 +119,15 @@ jobs:
             --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
             --use-motor-commands | tee /tmp/release_replay.log
 
+      - name: Shadow-mode arbitration replay
+        run: |
+          python -m world_model_experiments.run_shadow_mode_replay \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
+            --episodes 8 \
+            --ood-threshold 0.10 \
+            --use-motor-commands | tee /tmp/release_shadow.log
+
       - name: Sensor sync validation
         run: |
           python -m world_model_experiments.check_sensor_sync \
@@ -147,6 +156,7 @@ jobs:
             --runtime-log /tmp/release_runtime.log \
             --onnx-log /tmp/release_onnx.log \
             --replay-log /tmp/release_replay.log \
+            --shadow-log /tmp/release_shadow.log \
             --sync-log /tmp/release_sync.log \
             --ood-log /tmp/release_ood.log \
             --system-id-log /tmp/release_system_id.log \
@@ -157,6 +167,8 @@ jobs:
             --max-parity-diff 1e-4 \
             --max-replay-pose-delta-mse 0.01 \
             --max-replay-reward-mse 0.02 \
+            --max-shadow-fallback-rate 0.50 \
+            --max-shadow-emergency-rate 0.01 \
             --max-shield-emergency-rate 0.01 \
             --max-sync-jitter-us 5000 \
             --max-ood-rate 0.10 \
@@ -186,6 +198,7 @@ jobs:
             /tmp/release_onnx.log
             /tmp/release_runtime.log
             /tmp/release_replay.log
+            /tmp/release_shadow.log
             /tmp/release_sync.log
             /tmp/release_ood.log
             /tmp/release_system_id.log

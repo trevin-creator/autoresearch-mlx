@@ -12,6 +12,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--robust-log", type=str, required=True)
     p.add_argument("--runtime-log", type=str, required=True)
     p.add_argument("--replay-log", type=str, required=True)
+    p.add_argument("--shadow-log", type=str, required=True)
     p.add_argument("--sync-log", type=str, required=True)
     p.add_argument("--ood-log", type=str, required=True)
     p.add_argument("--system-id-log", type=str, required=True)
@@ -57,6 +58,7 @@ def main() -> None:
     robust = _parse_json(_read(args.robust_log), "robust_eval")
     runtime = _parse_dict(_read(args.runtime_log), "runtime_benchmark")
     replay = _parse_dict(_read(args.replay_log), "real_replay_eval")
+    shadow = _parse_dict(_read(args.shadow_log), "shadow_mode_eval")
     sync = _parse_dict(_read(args.sync_log), "sensor_sync")
     ood = _parse_dict(_read(args.ood_log), "ood_guard")
     sid = _parse_dict(_read(args.system_id_log), "system_id")
@@ -94,6 +96,11 @@ def main() -> None:
             "R7 System identification",
             _status(sid.get("corr_velocity", 0.0) >= 0.05),
             f"corr_velocity={sid.get('corr_velocity', -1):.6f}",
+        ),
+        (
+            "R8 Shadow arbitration",
+            _status(shadow.get("shield_emergency_rate", 1.0) <= 0.01),
+            f"fallback_rate={shadow.get('fallback_rate', -1):.6f}, shield_emergency_rate={shadow.get('shield_emergency_rate', -1):.6f}",
         ),
     ]
 

@@ -14,6 +14,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--runtime-log", type=str, required=True)
     p.add_argument("--onnx-log", type=str, required=True)
     p.add_argument("--replay-log", type=str, required=True)
+    p.add_argument("--shadow-log", type=str, required=True)
     p.add_argument("--sync-log", type=str, required=True)
     p.add_argument("--ood-log", type=str, required=True)
     p.add_argument("--system-id-log", type=str, required=True)
@@ -25,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-parity-diff", type=float, default=1e-4)
     p.add_argument("--max-replay-pose-delta-mse", type=float, default=0.01)
     p.add_argument("--max-replay-reward-mse", type=float, default=0.02)
+    p.add_argument("--max-shadow-fallback-rate", type=float, default=0.5)
+    p.add_argument("--max-shadow-emergency-rate", type=float, default=0.01)
     p.add_argument("--max-shield-emergency-rate", type=float, default=0.01)
     p.add_argument("--max-sync-jitter-us", type=float, default=5000.0)
     p.add_argument("--max-ood-rate", type=float, default=0.10)
@@ -89,6 +92,7 @@ def main() -> None:
     runtime = _parse_dict(_read_lines(args.runtime_log), "runtime_benchmark")
     onnx = _parse_dict(_read_lines(args.onnx_log), "onnx_parity")
     replay = _parse_dict(_read_lines(args.replay_log), "real_replay_eval")
+    shadow = _parse_dict(_read_lines(args.shadow_log), "shadow_mode_eval")
     sync = _parse_dict(_read_lines(args.sync_log), "sensor_sync")
     ood = _parse_dict(_read_lines(args.ood_log), "ood_guard")
     sid = _parse_dict(_read_lines(args.system_id_log), "system_id")
@@ -132,6 +136,12 @@ def main() -> None:
         failures,
     )
     _fail_if(replay.get("global_reward_mse", 1e9) > args.max_replay_reward_mse, "replay reward mse too high", failures)
+    _fail_if(shadow.get("fallback_rate", 1e9) > args.max_shadow_fallback_rate, "shadow fallback rate too high", failures)
+    _fail_if(
+        shadow.get("shield_emergency_rate", 1e9) > args.max_shadow_emergency_rate,
+        "shadow shield emergency rate too high",
+        failures,
+    )
     _fail_if(sync.get("pass", 0.0) < 1.0, "sensor sync failed", failures)
     _fail_if(sync.get("jitter_p95_us", 1e9) > args.max_sync_jitter_us, "sensor sync jitter too high", failures)
     _fail_if(ood.get("pass", 0.0) < 1.0, "ood guard failed", failures)
