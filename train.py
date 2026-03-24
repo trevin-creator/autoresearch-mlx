@@ -221,10 +221,102 @@ class GPT(nn.Module):
         return mx.sum(ce) / denom
 
 
-class AdamW:
+# ---------------------------------------------------------------------------
+# Muon Optimizer for MLX
+# ---------------------------------------------------------------------------
+
+# Newton-Schulz coefficients for polar decomposition (Polar Express)
+POLAR_EXPRESS_COEFFS = [
+    (8.156554524902461, -22.48329292557795, 15.878769915207462),
+    (4.042929935166739, -2.808917465908714, 0.5000178451051316),
+    (3.8916678022926607, -2.772484153217685, 0.5060648178503393),
+    (3.285753657755655, -2.3681294933425376, 0.46449024233003106),
+    (2.3465413258596377, -1.7097828382687081, 0.42323551169305323),
+]
+
+
+def polar_express_ortho(X, ns_steps=5):
+    """
+    Polar Express: Newton-Schulz iteration for orthogonalization.
+    Returns an approximately orthogonal matrix from X.
+    X is a 2D matrix of shape (rows, cols).
+    """
+    # Normalize input by Frobenius norm
+    norm_val = mx.sqrt(mx.sum(X * X)) * 1.02 + 1e-6
+    X = X / norm_val
+
+    # Choose iteration direction based on matrix shape
+    if X.shape[0] > X.shape[1]:
+        # Tall matrix: X.T @ X
+        for a, b, c in POLAR_EXPRESS_COEFFS[:ns_steps]:
+            A = mx.matmul(X.T, X)
+            B = b * A + c * mx.matmul(A, A)
+            X = a * X + mx.matmul(X, B)
+    else:
+        # Wide matrix: X @ X.T
+        for a, b, c in POLAR_EXPRESS_COEFFS[:ns_steps]:
+            A = mx.matmul(X, X.T)
+            B = b * A + c * mx.matmul(A, A)
+            X = a * X + mx.matmul(B, X)
+
+    return X
+
+
+def muon_step(grad, param, momentum_buffer, second_momentum_buffer, momentum, lr, wd, beta2, ns_steps):
+    """
+    Muon optimizer step for a single 2D parameter.
+    Uses Nesterov momentum, Polar Express orthogonalization, and NorMuon variance reduction.
+    """
+    # Nesterov momentum update
+    new_momentum_buffer = momentum * momentum_buffer + (1 - momentum) * grad
+    g = grad + momentum * new_momentum_buffer
+
+    # Polar Express orthogonalization
+    g_bf16 = g.astype(mx.bfloat16)
+    g_ortho = polar_express_ortho(g_bf16, ns_steps)
+
+    # NorMuon variance reduction
+    # Determine reduction dimension based on shape
+    if g_ortho.shape[0] >= g_ortho.shape[1]:
+        red_dim = -1  # reduce along columns
+    else:
+        red_dim = -2  # reduce along rows
+
+    # Compute variance normalization
+    v_mean = mx.mean(g_ortho.astype(mx.float32) ** 2, axis=red_dim, keepdims=True)
+    red_dim_size = g_ortho.shape[red_dim]
+    v_norm_sq = mx.sum(v_mean) * red_dim_size
+    v_norm = mx.sqrt(v_norm_sq)
+
+    # Update second momentum buffer
+    new_second_momentum_buffer = beta2 * second_momentum_buffer + (1 - beta2) * v_mean.astype(second_momentum_buffer.dtype)
+
+    # Compute scaling
+    step_size = mx.rsqrt(mx.maximum(new_second_momentum_buffer, 1e-10))
+    scaled_sq_sum = (v_mean * red_dim_size) * (step_size.astype(mx.float32) ** 2)
+    v_norm_new = mx.sqrt(mx.sum(scaled_sq_sum))
+    final_scale = step_size * (v_norm / mx.maximum(v_norm_new, 1e-10))
+
+    # Apply scaling - need to broadcast properly
+    g_scaled = g_ortho * final_scale.astype(g_ortho.dtype)
+
+    # Cautious weight decay: only decay where grad and param have same sign
+    mask = (g_scaled.astype(mx.float32) * param.astype(mx.float32)) >= 0
+
+    # Parameter update: param = param - lr * g - lr * wd * param * mask
+    new_param = param - lr * g_scaled.astype(param.dtype) - lr * wd * param * mask.astype(param.dtype)
+
+    return new_param, new_momentum_buffer, new_second_momentum_buffer
+
+
+class MuonAdamW:
+    """
+    Combined optimizer: Muon for 2D matrix params, AdamW for others (embeddings, scalars, lm_head).
+    """
+
     def __init__(self, model, unembedding_lr, embedding_lr, matrix_lr, weight_decay, adam_betas, scalar_lr):
         self.param_config = {}
-        self.adam_state = {}
+        self.state = {}
 
         model_dim = model.config.n_embd
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -232,14 +324,18 @@ class AdamW:
         flat_params = tree_flatten(model.parameters())
         for path, param in flat_params:
             if "blocks" in path and param.ndim == 2:
+                # Muon for 2D matrix parameters in transformer blocks
                 self.param_config[path] = {
+                    "kind": "muon",
                     "lr": matrix_lr,
-                    "betas": adam_betas,
-                    "eps": 1e-10,
+                    "momentum": 0.95,
+                    "ns_steps": 5,
+                    "beta2": 0.95,
                     "weight_decay": weight_decay,
                 }
             elif "wte" in path:
                 self.param_config[path] = {
+                    "kind": "adamw",
                     "lr": embedding_lr * dmodel_lr_scale,
                     "betas": adam_betas,
                     "eps": 1e-10,
@@ -247,6 +343,7 @@ class AdamW:
                 }
             elif "value_embeds" in path:
                 self.param_config[path] = {
+                    "kind": "adamw",
                     "lr": embedding_lr * dmodel_lr_scale,
                     "betas": adam_betas,
                     "eps": 1e-10,
@@ -254,6 +351,7 @@ class AdamW:
                 }
             elif "lm_head" in path:
                 self.param_config[path] = {
+                    "kind": "adamw",
                     "lr": unembedding_lr * dmodel_lr_scale,
                     "betas": adam_betas,
                     "eps": 1e-10,
@@ -261,6 +359,7 @@ class AdamW:
                 }
             elif "resid_lambdas" in path:
                 self.param_config[path] = {
+                    "kind": "adamw",
                     "lr": scalar_lr * 0.01,
                     "betas": adam_betas,
                     "eps": 1e-10,
@@ -268,6 +367,7 @@ class AdamW:
                 }
             elif "x0_lambdas" in path:
                 self.param_config[path] = {
+                    "kind": "adamw",
                     "lr": scalar_lr,
                     "betas": (0.96, 0.95),
                     "eps": 1e-10,
@@ -275,6 +375,7 @@ class AdamW:
                 }
             else:
                 self.param_config[path] = {
+                    "kind": "adamw",
                     "lr": unembedding_lr * dmodel_lr_scale,
                     "betas": adam_betas,
                     "eps": 1e-10,
@@ -299,7 +400,16 @@ class AdamW:
         else:
             setattr(obj, last, value)
 
-    def _step(self, path, grad, param, config):
+    def _init_adamw_state(self, path, grad):
+        if path not in self.state:
+            self.state[path] = {
+                "m": mx.zeros_like(grad.astype(mx.float32)),
+                "v": mx.zeros_like(grad.astype(mx.float32)),
+                "t": 0,
+            }
+
+    def _adamw_step(self, path, grad, param, config):
+        """AdamW update step."""
         grad_f32 = grad.astype(mx.float32)
         param_f32 = param.astype(mx.float32)
         lr = config["lr"]
@@ -307,14 +417,9 @@ class AdamW:
         eps = config["eps"]
         weight_decay = config["weight_decay"]
 
-        if path not in self.adam_state:
-            self.adam_state[path] = {
-                "m": mx.zeros_like(grad_f32),
-                "v": mx.zeros_like(grad_f32),
-                "t": 0,
-            }
+        self._init_adamw_state(path, grad)
+        state = self.state[path]
 
-        state = self.adam_state[path]
         state["t"] += 1
         state["m"] = beta1 * state["m"] + (1 - beta1) * grad_f32
         state["v"] = beta2 * state["v"] + (1 - beta2) * (grad_f32 * grad_f32)
@@ -328,6 +433,51 @@ class AdamW:
         param_f32 = param_f32 - step_size * (state["m"] / denom)
         return param_f32.astype(param.dtype)
 
+    def _init_muon_state(self, path, param):
+        if path not in self.state:
+            shape = param.shape
+            dtype = param.dtype
+            # Create momentum buffer with same shape as param
+            self.state[path] = {
+                "momentum_buffer": mx.zeros(shape, dtype=dtype),
+            }
+            # Create second momentum buffer with shape based on reduction dimension
+            if shape[0] >= shape[1]:
+                # Reduce along last dim
+                self.state[path]["second_momentum_buffer"] = mx.zeros((shape[0], 1), dtype=dtype)
+            else:
+                # Reduce along second-to-last dim
+                self.state[path]["second_momentum_buffer"] = mx.zeros((1, shape[1]), dtype=dtype)
+
+    def _muon_step(self, path, grad, param, config):
+        """Muon update step."""
+        self._init_muon_state(path, param)
+        state = self.state[path]
+
+        momentum = config["momentum"]
+        # Scale LR by sqrt(aspect ratio) as in original Muon
+        lr = config["lr"] * max(1.0, param.shape[0] / param.shape[1]) ** 0.5
+        wd = config["weight_decay"]
+        beta2 = config["beta2"]
+        ns_steps = config["ns_steps"]
+
+        new_param, new_momentum, new_second_momentum = muon_step(
+            grad.astype(mx.bfloat16),
+            param,
+            state["momentum_buffer"],
+            state["second_momentum_buffer"],
+            momentum,
+            lr,
+            wd,
+            beta2,
+            ns_steps,
+        )
+
+        state["momentum_buffer"] = new_momentum
+        state["second_momentum_buffer"] = new_second_momentum
+
+        return new_param
+
     def update(self, model, grads):
         flat_grads = dict(tree_flatten(grads))
         flat_params = dict(tree_flatten(model.parameters()))
@@ -336,18 +486,41 @@ class AdamW:
                 continue
             config = self.param_config[path]
             param = flat_params[path]
-            new_param = self._step(path, grad, param, config)
+
+            if config["kind"] == "adamw":
+                new_param = self._adamw_step(path, grad, param, config)
+            elif config["kind"] == "muon":
+                new_param = self._muon_step(path, grad, param, config)
+            else:
+                continue
+
             self._set_path_value(model, path, new_param)
 
     def set_lr_multiplier(self, multiplier):
         for path, config in self.param_config.items():
             config["lr"] = self.initial_lrs[path] * multiplier
 
+    def set_muon_momentum(self, momentum):
+        """Update Muon momentum for all Muon parameters."""
+        for path, config in self.param_config.items():
+            if config["kind"] == "muon":
+                config["momentum"] = momentum
+
+    def set_muon_weight_decay(self, weight_decay):
+        """Update Muon weight decay for all Muon parameters."""
+        for path, config in self.param_config.items():
+            if config["kind"] == "muon":
+                config["weight_decay"] = weight_decay
+
     @property
-    def state(self):
+    def optimizer_state(self):
+        """Return all optimizer state arrays for mx.eval()."""
         arrays = []
-        for state in self.adam_state.values():
-            arrays.extend([state["m"], state["v"]])
+        for path, state in self.state.items():
+            if "m" in state:
+                arrays.extend([state["m"], state["v"]])
+            elif "momentum_buffer" in state:
+                arrays.extend([state["momentum_buffer"], state["second_momentum_buffer"]])
         return arrays
 
 
@@ -360,7 +533,7 @@ ASPECT_RATIO = 64
 HEAD_DIM = 128
 WINDOW_PATTERN = "SSSL"
 
-# v0.1: AdamW only. Muon port is future work.
+# Optimization
 TOTAL_BATCH_SIZE = 2**16
 EMBEDDING_LR = 0.6
 UNEMBEDDING_LR = 0.004
@@ -375,7 +548,7 @@ FINAL_LR_FRAC = 0.0
 # Model size
 DEPTH = 4
 DEVICE_BATCH_SIZE = 16
-FINAL_EVAL_BATCH_SIZE = 256
+FINAL_EVAL_BATCH_SIZE = 16
 STARTUP_EXCLUDE_STEPS = 1
 
 
@@ -386,6 +559,17 @@ def get_lr_multiplier(progress):
         return 1.0
     cooldown = (1.0 - progress) / WARMDOWN_RATIO
     return cooldown * 1.0 + (1 - cooldown) * FINAL_LR_FRAC
+
+
+def get_muon_momentum(step):
+    """Linear interpolation of Muon momentum from 0.85 to 0.95 over 300 steps."""
+    frac = min(step / 300, 1)
+    return (1 - frac) * 0.85 + frac * 0.95
+
+
+def get_muon_weight_decay(progress):
+    """Linearly decay weight decay from initial value to 0."""
+    return WEIGHT_DECAY * (1 - progress)
 
 
 t_start = time.time()
@@ -418,7 +602,7 @@ tokens_per_fwdbwd = DEVICE_BATCH_SIZE * MAX_SEQ_LEN
 assert TOTAL_BATCH_SIZE % tokens_per_fwdbwd == 0
 grad_accum_steps = TOTAL_BATCH_SIZE // tokens_per_fwdbwd
 
-optimizer = AdamW(
+optimizer = MuonAdamW(
     model,
     unembedding_lr=UNEMBEDDING_LR,
     embedding_lr=EMBEDDING_LR,
@@ -462,8 +646,15 @@ while True:
     progress = min(total_training_time / TIME_BUDGET, 1.0)
     lrm = get_lr_multiplier(progress)
     optimizer.set_lr_multiplier(lrm)
+
+    # Update Muon-specific schedules
+    muon_momentum = get_muon_momentum(step)
+    muon_weight_decay = get_muon_weight_decay(progress)
+    optimizer.set_muon_momentum(muon_momentum)
+    optimizer.set_muon_weight_decay(muon_weight_decay)
+
     optimizer.update(model, accum_grads)
-    mx.eval(model.parameters(), *optimizer.state)
+    mx.eval(model.parameters(), *optimizer.optimizer_state)
 
     train_loss_f = float(train_loss.item())
     if train_loss_f > 100:
