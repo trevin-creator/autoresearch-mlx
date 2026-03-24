@@ -12,10 +12,15 @@ from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureLeWmC
 
 
 class FeatureSequenceDataset(Dataset):
-    def __init__(self, h5_path: str | Path):
+    def __init__(self, h5_path: str | Path, use_motor_commands: bool):
         with h5py.File(h5_path, "r") as h5:
             self.features = np.asarray(h5["features"], dtype=np.float32)
-            self.actions = np.asarray(h5["actions"], dtype=np.float32)
+            if use_motor_commands:
+                if "motor_commands" not in h5:
+                    raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+                self.actions = np.asarray(h5["motor_commands"], dtype=np.float32)
+            else:
+                self.actions = np.asarray(h5["actions"], dtype=np.float32)
             self.flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
 
         if self.features.shape[0] != self.actions.shape[0]:
@@ -50,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--heads", type=int, default=8)
     p.add_argument("--sigreg-weight", type=float, default=10.0)
     p.add_argument("--use-flight-plan", action="store_true", help="Concatenate flight_plan with actions")
+    p.add_argument("--use-motor-commands", action="store_true", help="Use motor_commands key as action source")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
@@ -59,7 +65,10 @@ def train() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    ds = FeatureSequenceDataset(args.dataset)
+    if args.use_motor_commands and args.use_flight_plan:
+        raise ValueError("--use-motor-commands and --use-flight-plan are mutually exclusive")
+
+    ds = FeatureSequenceDataset(args.dataset, use_motor_commands=args.use_motor_commands)
     n_val = max(1, int(0.1 * len(ds)))
     n_train = len(ds) - n_val
     train_ds, val_ds = random_split(ds, [n_train, n_val], generator=torch.Generator().manual_seed(args.seed))

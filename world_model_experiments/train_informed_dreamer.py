@@ -12,10 +12,15 @@ from world_model_experiments.informed_dreamer_model import InformedDreamerConfig
 
 
 class InformedDataset(Dataset):
-    def __init__(self, h5_path: str | Path, use_flight_plan: bool):
+    def __init__(self, h5_path: str | Path, use_flight_plan: bool, use_motor_commands: bool):
         with h5py.File(h5_path, "r") as h5:
             self.features = np.asarray(h5["features"], dtype=np.float32)
-            actions = np.asarray(h5["actions"], dtype=np.float32)
+            if use_motor_commands:
+                if "motor_commands" not in h5:
+                    raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+                actions = np.asarray(h5["motor_commands"], dtype=np.float32)
+            else:
+                actions = np.asarray(h5["actions"], dtype=np.float32)
             if use_flight_plan and "flight_plan" in h5:
                 actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
             self.actions = actions
@@ -37,6 +42,9 @@ class InformedDataset(Dataset):
         return self.features.shape[0]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        if self.reward is None or self.cont is None:
+            raise RuntimeError("reward/continue arrays must be initialized before indexing")
+
         return {
             "features": torch.from_numpy(self.features[idx]),
             "actions": torch.from_numpy(self.actions[idx]),
@@ -59,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hidden-dim", type=int, default=192)
     p.add_argument("--horizon", type=int, default=8)
     p.add_argument("--use-flight-plan", action="store_true")
+    p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
@@ -68,7 +77,14 @@ def train() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    ds = InformedDataset(args.dataset, use_flight_plan=args.use_flight_plan)
+    if args.use_motor_commands and args.use_flight_plan:
+        raise ValueError("--use-motor-commands and --use-flight-plan are mutually exclusive")
+
+    ds = InformedDataset(
+        args.dataset,
+        use_flight_plan=args.use_flight_plan,
+        use_motor_commands=args.use_motor_commands,
+    )
     n_val = max(1, int(0.1 * len(ds)))
     n_train = len(ds) - n_val
     train_ds, val_ds = random_split(ds, [n_train, n_val], generator=torch.Generator().manual_seed(args.seed))
