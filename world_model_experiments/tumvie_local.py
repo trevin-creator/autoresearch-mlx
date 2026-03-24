@@ -12,8 +12,6 @@ from world_model_experiments.snn_feature_pipeline import (
     SnnFeatureConfig,
     SpyxStereoImuFeatureExtractor,
     StereoImuBatch,
-    windows_to_sequences,
-    write_feature_hdf5,
 )
 
 
@@ -29,6 +27,14 @@ class TumvieWindowConfig:
     downsample_factor: float = 0.1
     max_windows: int = 64
     imu_dim: int = 6
+
+
+@dataclass(frozen=True)
+class TumvieWindowSample:
+    batch: StereoImuBatch
+    end_us: int
+    pose: np.ndarray
+    pose_delta: np.ndarray
 
 
 def _quat_to_euler_xyz(quat: np.ndarray) -> np.ndarray:
@@ -147,20 +153,21 @@ def _interp_series(sample_times_us: np.ndarray, times_us: np.ndarray, values: np
     return out
 
 
-def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[StereoImuBatch]:
+def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[TumvieWindowSample]:
     recording_dir = Path(cfg.recording_dir)
     left_stream = _TumvieEventStream(recording_dir / f"{recording_dir.name}-events_left.h5")
     right_stream = _TumvieEventStream(recording_dir / f"{recording_dir.name}-events_right.h5")
     imu_times, imu_values = _load_imu_series(recording_dir)
-    mocap_times, _poses = _load_mocap_series(recording_dir)
+    mocap_times, poses = _load_mocap_series(recording_dir)
 
     output_hw = _downsample_hw(cfg.downsample_factor)
     sample_offsets = np.linspace(0, cfg.window_us, cfg.sample_t, endpoint=False, dtype=np.float64)
     used = 0
     last_end_us = -1
+    prev_pose: np.ndarray | None = None
 
     min_time = max(int(imu_times[0]), int(left_stream.t[0]), int(right_stream.t[0]))
-    for end_us in mocap_times:
+    for idx, end_us in enumerate(mocap_times):
         if end_us < min_time + cfg.window_us:
             continue
         if last_end_us >= 0 and end_us - last_end_us < cfg.stride_us:
@@ -178,16 +185,24 @@ def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[StereoImuBatch]:
         right_frames = _rasterize_events(right_t, right_x, right_y, right_p, start_us, int(end_us), cfg.sample_t, output_hw)
         imu_seq = _interp_series(sample_times, imu_times, imu_values)
         action = np.mean(imu_seq, axis=0, keepdims=True).astype(np.float32)
+        pose = poses[idx].astype(np.float32)
+        pose_delta = np.zeros_like(pose) if prev_pose is None else (pose - prev_pose).astype(np.float32)
 
-        yield StereoImuBatch(
-            left_events=left_frames[:, None, ...],
-            right_events=right_frames[:, None, ...],
-            imu=imu_seq[:, None, :],
-            actions=action,
+        yield TumvieWindowSample(
+            batch=StereoImuBatch(
+                left_events=left_frames[:, None, ...],
+                right_events=right_frames[:, None, ...],
+                imu=imu_seq[:, None, :],
+                actions=action,
+            ),
+            end_us=int(end_us),
+            pose=pose,
+            pose_delta=pose_delta,
         )
 
         used += 1
         last_end_us = int(end_us)
+        prev_pose = pose
         if used >= cfg.max_windows:
             break
 
@@ -199,8 +214,46 @@ def build_tumvie_feature_dataset(
     output_path: str | Path,
 ) -> Path:
     extractor = SpyxStereoImuFeatureExtractor(snn_cfg)
-    windows = list(iter_tumvie_windows(tumvie_cfg))
-    sequences = windows_to_sequences(extractor, windows, sequence_len=sequence_len, action_dim=tumvie_cfg.imu_dim)
-    if not sequences:
+    samples = list(iter_tumvie_windows(tumvie_cfg))
+    if not samples:
+        raise ValueError("No TUMVIE windows were generated; check timing and recording availability.")
+
+    features_per_window: list[np.ndarray] = []
+    actions_per_window: list[np.ndarray] = []
+    pose_per_window: list[np.ndarray] = []
+    pose_delta_per_window: list[np.ndarray] = []
+    timestamps_per_window: list[int] = []
+
+    for sample in samples:
+        vec = extractor.extract(sample.batch)
+        features_per_window.append(vec[0].astype(np.float32))
+        actions_per_window.append(np.asarray(sample.batch.actions, dtype=np.float32)[0])
+        pose_per_window.append(sample.pose.astype(np.float32))
+        pose_delta_per_window.append(sample.pose_delta.astype(np.float32))
+        timestamps_per_window.append(sample.end_us)
+
+    if len(features_per_window) < sequence_len:
         raise ValueError("No TUMVIE sequences were generated; try increasing max_windows or reducing sequence_len.")
-    return write_feature_hdf5(sequences, output_path)
+
+    seq_features = []
+    seq_actions = []
+    seq_pose = []
+    seq_pose_delta = []
+    seq_timestamps = []
+    for start in range(0, len(features_per_window) - sequence_len + 1, sequence_len):
+        end = start + sequence_len
+        seq_features.append(np.stack(features_per_window[start:end], axis=0))
+        seq_actions.append(np.stack(actions_per_window[start:end], axis=0))
+        seq_pose.append(np.stack(pose_per_window[start:end], axis=0))
+        seq_pose_delta.append(np.stack(pose_delta_per_window[start:end], axis=0))
+        seq_timestamps.append(np.asarray(timestamps_per_window[start:end], dtype=np.int64))
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(output, "w") as h5:
+        h5.create_dataset("features", data=np.stack(seq_features, axis=0), compression="gzip")
+        h5.create_dataset("actions", data=np.stack(seq_actions, axis=0), compression="gzip")
+        h5.create_dataset("pose", data=np.stack(seq_pose, axis=0), compression="gzip")
+        h5.create_dataset("pose_delta", data=np.stack(seq_pose_delta, axis=0), compression="gzip")
+        h5.create_dataset("timestamps_us", data=np.stack(seq_timestamps, axis=0), compression="gzip")
+    return output

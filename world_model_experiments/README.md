@@ -18,6 +18,7 @@ This folder provides a practical scaffold for your requested stack:
 - `snn_feature_pipeline.py`: Spyx stereo/IMU feature extractor and HDF5 writer.
 - `tumvie_local.py`: local TUMVIE event/IMU reader for the existing dataset files in this repo.
 - `build_tumvie_feature_dataset.py`: CLI to generate feature/action HDF5 from real TUMVIE windows.
+- `evaluate_tumvie_probe.py`: linear probe that tests whether the learned embedding predicts real pose deltas.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -119,7 +120,19 @@ python -m world_model_experiments.train_feature_lewm \
   --hidden-dim 64 \
   --depth 1 \
   --heads 4
+
+python -m world_model_experiments.evaluate_tumvie_probe \
+  --dataset artifacts/tumvie/tumvie_features.h5 \
+  --checkpoint artifacts/tumvie/feature_lewm/feature_lewm_best.pt
 ```
+
+The generated TUMVIE HDF5 now includes:
+
+- `features`: SNN-derived feature vectors
+- `actions`: IMU-summary action proxy
+- `pose`: aligned 6DOF pose
+- `pose_delta`: aligned pose change between accepted windows
+- `timestamps_us`: original recording timestamps
 
 ## Integrating real Tonic stereo+IMU data
 
