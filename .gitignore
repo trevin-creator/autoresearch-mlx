@@ -1,9 +1,34 @@
+# os
 .DS_Store
+
+# python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# test/lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# logs
 *.log
 run.log
+
+# model weights and data artifacts
+*.safetensors
+*.bin
+*.gguf
+*.npz
+*.npy
+data/
+
+# project scratch files
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md
+results.tsv

@@ -1,0 +1,7 @@
+# uv configuration for faster builds
+# see https://docs.astral.sh/uv/reference/settings/
+
+compile-bytecode = true
+link-mode = "hardlink"
+concurrent-downloads = 8
+index-strategy = "first-index"
