@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import time
 from pathlib import Path
@@ -22,6 +23,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batches", type=int, default=16)
     p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--opset", type=int, default=17)
+    p.add_argument("--warmup-runs", type=int, default=5)
+    p.add_argument("--timed-runs", type=int, default=20)
+    p.add_argument("--csv-output", type=str, default="")
+    p.add_argument("--tag", type=str, default="")
     return p.parse_args()
 
 
@@ -89,11 +94,17 @@ def main() -> None:
             enc = model.encode(feat_t, act_t)
             pt = model.predict(enc["emb"], enc["act_emb"]).cpu().numpy()
 
+        for _ in range(max(0, args.warmup_runs)):
+            sess.run(None, {"features": feat_i, "actions": act_i})
+
+        timed = max(1, args.timed_runs)
         t0 = time.perf_counter()
-        ort_raw = sess.run(None, {"features": feat_i, "actions": act_i})[0]
-        ort_out = cast(np.ndarray[Any, Any], ort_raw)
+        ort_raw = None
+        for _ in range(timed):
+            ort_raw = sess.run(None, {"features": feat_i, "actions": act_i})[0]
         t1 = time.perf_counter()
-        lat_ms.append((t1 - t0) * 1000.0)
+        ort_out = cast(np.ndarray[Any, Any], ort_raw)
+        lat_ms.append(((t1 - t0) * 1000.0) / timed)
 
         d = np.abs(pt - ort_out)
         max_abs.append(float(d.max()))
@@ -101,6 +112,8 @@ def main() -> None:
 
     result = {
         "batches": float(n),
+        "warmup_runs": float(max(0, args.warmup_runs)),
+        "timed_runs": float(max(1, args.timed_runs)),
         "latency_ms_mean": float(np.mean(lat_ms)) if lat_ms else 0.0,
         "latency_ms_p95": float(np.percentile(lat_ms, 95)) if lat_ms else 0.0,
         "latency_ms_jitter_std": float(np.std(lat_ms)) if lat_ms else 0.0,
@@ -108,6 +121,30 @@ def main() -> None:
         "parity_mean_abs_mean": float(np.mean(mean_abs)) if mean_abs else 0.0,
         "parity_allclose_1e-4_rate": float(np.mean([x <= 1e-4 for x in max_abs])) if max_abs else 0.0,
     }
+
+    if args.csv_output:
+        csv_path = Path(args.csv_output)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = [
+            "tag",
+            "batches",
+            "warmup_runs",
+            "timed_runs",
+            "latency_ms_mean",
+            "latency_ms_p95",
+            "latency_ms_jitter_std",
+            "parity_max_abs_mean",
+            "parity_mean_abs_mean",
+            "parity_allclose_1e-4_rate",
+        ]
+        write_header = not csv_path.exists()
+        with csv_path.open("a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                w.writeheader()
+            row = {k: result[k] for k in fieldnames if k != "tag"}
+            row["tag"] = args.tag
+            w.writerow(row)
 
     print("runtime_benchmark", json.dumps(result, sort_keys=True))
 

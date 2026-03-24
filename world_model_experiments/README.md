@@ -33,6 +33,7 @@ This folder provides a practical scaffold for your requested stack:
 - `evaluate_motor_robustness.py`: disturbance robustness evaluator across calm/wind/gust/noisy scenarios.
 - `run_motor_robustness_report.py`: per-seed robustness aggregator that writes CSV/Markdown artifacts.
 - `benchmark_motor_onnx_runtime.py`: runtime latency/jitter and parity stress benchmark for ONNXRuntime.
+- `check_phase35_gates.py`: fail-fast metric gates for closed-loop safety, robustness, and runtime/parity checks.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -263,12 +264,39 @@ python -m world_model_experiments.run_motor_robustness_report \
   --episodes 8 \
   --horizon 8
 
+python -m world_model_experiments.run_motor_robustness_report \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint-root artifacts/sim/motor_multiseed \
+  --output-root artifacts/sim/motor_robustness_matrix \
+  --seeds 0,1,2 \
+  --episodes 8 \
+  --horizon 8 \
+  --scenario-mode matrix \
+  --wind-stds 0.0,0.5,1.0 \
+  --act-noise-stds 0.0,0.08,0.16 \
+  --latency-steps 0,1,2
+
 python -m world_model_experiments.benchmark_motor_onnx_runtime \
   --checkpoint artifacts/sim/feature_lewm_motor/feature_lewm_best.pt \
   --dataset artifacts/sim/sim_motor_rollouts.h5 \
   --output artifacts/sim/feature_lewm_motor/feature_lewm_motor_runtime.onnx \
   --batches 16 \
+  --warmup-runs 5 \
+  --timed-runs 20 \
+  --csv-output artifacts/sim/feature_lewm_motor/runtime_trend.csv \
+  --tag local-dev \
   --use-motor-commands
+
+python -m world_model_experiments.check_phase35_gates \
+  --closed-loop-log /tmp/ci_closed_loop.log \
+  --robust-log /tmp/ci_robust.log \
+  --runtime-log /tmp/ci_runtime.log \
+  --onnx-log /tmp/ci_onnx_parity.log \
+  --max-crash-rate 0.05 \
+  --max-termination-rate 0.05 \
+  --min-survival 0.85 \
+  --max-latency-p95-ms 8.0 \
+  --max-parity-diff 1e-4
 ```
 
 ## Integrating real Tonic stereo+IMU data

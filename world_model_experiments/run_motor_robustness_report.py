@@ -17,6 +17,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seeds", type=str, default="0,1,2")
     p.add_argument("--episodes", type=int, default=8)
     p.add_argument("--horizon", type=int, default=8)
+    p.add_argument("--scenario-mode", type=str, choices=["preset", "matrix"], default="preset")
+    p.add_argument("--wind-stds", type=str, default="0.0,0.5,1.0")
+    p.add_argument("--act-noise-stds", type=str, default="0.0,0.05,0.12")
+    p.add_argument("--latency-steps", type=str, default="0,1,2")
     return p.parse_args()
 
 
@@ -74,6 +78,14 @@ def main() -> None:
             "--use-motor-commands",
             "--seed",
             str(seed),
+            "--scenario-mode",
+            args.scenario_mode,
+            "--wind-stds",
+            args.wind_stds,
+            "--act-noise-stds",
+            args.act_noise_stds,
+            "--latency-steps",
+            args.latency_steps,
         ]
         out = run_cmd(cmd)
         per_seed[seed] = parse_robust_eval(out)

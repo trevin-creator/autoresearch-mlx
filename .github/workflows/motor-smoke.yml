@@ -81,7 +81,7 @@ jobs:
             --checkpoint /tmp/ci_informed_dreamer_motor/informed_dreamer_best.pt \
             --episodes 2 \
             --horizon 4 \
-            --use-motor-commands
+            --use-motor-commands | tee /tmp/ci_closed_loop.log
 
       - name: Validate ONNX parity
         run: |
@@ -89,7 +89,7 @@ jobs:
             --checkpoint /tmp/ci_feature_lewm_motor/feature_lewm_best.pt \
             --dataset /tmp/ci_sim_motor_rollouts.h5 \
             --output /tmp/ci_feature_lewm_motor.onnx \
-            --use-motor-commands
+            --use-motor-commands | tee /tmp/ci_onnx_parity.log
 
       - name: Evaluate robustness scenarios
         run: |
@@ -98,7 +98,11 @@ jobs:
             --checkpoint /tmp/ci_informed_dreamer_motor/informed_dreamer_best.pt \
             --episodes 2 \
             --horizon 4 \
-            --use-motor-commands
+            --scenario-mode matrix \
+            --wind-stds 0.0,0.5,1.0 \
+            --act-noise-stds 0.0,0.08 \
+            --latency-steps 0,1 \
+            --use-motor-commands | tee /tmp/ci_robust.log
 
       - name: Benchmark ONNX runtime
         run: |
@@ -107,4 +111,21 @@ jobs:
             --dataset /tmp/ci_sim_motor_rollouts.h5 \
             --output /tmp/ci_feature_lewm_motor_runtime.onnx \
             --batches 4 \
-            --use-motor-commands
+            --warmup-runs 2 \
+            --timed-runs 8 \
+            --csv-output /tmp/ci_runtime_trend.csv \
+            --tag ci \
+            --use-motor-commands | tee /tmp/ci_runtime.log
+
+      - name: Enforce phase-3.5 gates
+        run: |
+          python -m world_model_experiments.check_phase35_gates \
+            --closed-loop-log /tmp/ci_closed_loop.log \
+            --robust-log /tmp/ci_robust.log \
+            --runtime-log /tmp/ci_runtime.log \
+            --onnx-log /tmp/ci_onnx_parity.log \
+            --max-crash-rate 0.05 \
+            --max-termination-rate 0.05 \
+            --min-survival 0.85 \
+            --max-latency-p95-ms 8.0 \
+            --max-parity-diff 1e-4

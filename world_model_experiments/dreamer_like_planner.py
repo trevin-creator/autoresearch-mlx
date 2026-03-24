@@ -31,16 +31,30 @@ def plan_actions_cem(
     action_dim: int,
     cfg: CEMConfig,
 ) -> torch.Tensor:
+    actions, _ = plan_actions_cem_with_stats(model, emb_history, goal_embedding, action_dim, cfg)
+    return actions
+
+
+@torch.no_grad()
+def plan_actions_cem_with_stats(
+    model: FeatureJEPA,
+    emb_history: torch.Tensor,
+    goal_embedding: torch.Tensor,
+    action_dim: int,
+    cfg: CEMConfig,
+) -> tuple[torch.Tensor, dict[str, float]]:
     """Dreamer-like latent planning using CEM over imagined embeddings.
 
     emb_history: [1, H, D]
     goal_embedding: [1, D]
-    returns: best action sequence [1, horizon, action_dim]
+    returns: (best action sequence [1, horizon, action_dim], safety diagnostics)
     """
 
     device = emb_history.device
     mean = torch.zeros((1, cfg.horizon, action_dim), device=device)
     std = torch.full((1, cfg.horizon, action_dim), 0.5, device=device)
+    invalid_total = 0
+    sampled_total = 0
 
     for _ in range(cfg.iters):
         noise = torch.randn((cfg.candidates, cfg.horizon, action_dim), device=device)
@@ -56,6 +70,7 @@ def plan_actions_cem(
         rollout = model.rollout_embeddings(hist, actions)
         final = rollout[:, -1]
         cost = torch.sum((final - goal_embedding.expand_as(final)) ** 2, dim=-1)
+        sampled_total += int(actions.shape[0])
 
         if cfg.action_slew_penalty > 0.0 and cfg.horizon > 1:
             slew = torch.mean(torch.abs(actions[:, 1:] - actions[:, :-1]), dim=(1, 2))
@@ -68,6 +83,7 @@ def plan_actions_cem(
         if cfg.rollout_norm_limit is not None and cfg.rollout_norm_limit > 0.0:
             rollout_norm = torch.mean(torch.linalg.norm(rollout, dim=-1), dim=-1)
             invalid = rollout_norm > cfg.rollout_norm_limit
+            invalid_total += int(torch.sum(invalid).item())
             cost = torch.where(invalid, torch.full_like(cost, cfg.invalid_cost), cost)
 
         elite_idx = torch.topk(cost, k=cfg.elites, largest=False).indices
@@ -76,9 +92,15 @@ def plan_actions_cem(
         mean = elite.mean(dim=0, keepdim=True)
         std = elite.std(dim=0, keepdim=True).clamp_min(1e-3)
 
-    return apply_motor_constraints(
+    best = apply_motor_constraints(
         mean,
         low=cfg.action_low,
         high=cfg.action_high,
         max_delta=cfg.max_action_delta,
     )
+    stats = {
+        "invalid_candidates": float(invalid_total),
+        "sampled_candidates": float(sampled_total),
+        "invalid_ratio": float(invalid_total / sampled_total) if sampled_total > 0 else 0.0,
+    }
+    return best, stats

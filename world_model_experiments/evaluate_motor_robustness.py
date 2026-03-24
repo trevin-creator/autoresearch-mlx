@@ -24,6 +24,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--use-flight-plan", action="store_true")
+    p.add_argument("--scenario-mode", type=str, choices=["preset", "matrix"], default="preset")
+    p.add_argument("--wind-stds", type=str, default="0.0,0.5,1.0")
+    p.add_argument("--act-noise-stds", type=str, default="0.0,0.05,0.12")
+    p.add_argument("--latency-steps", type=str, default="0,1,2")
     return p.parse_args()
 
 
@@ -46,6 +50,31 @@ def _scenario_table() -> dict[str, dict[str, float | int]]:
         "gust": {"wind_std": 1.0, "act_noise_std": 0.05, "latency_steps": 1},
         "noisy_actuation": {"wind_std": 0.2, "act_noise_std": 0.12, "latency_steps": 2},
     }
+
+
+def _parse_floats(csv_text: str) -> list[float]:
+    return [float(x.strip()) for x in csv_text.split(",") if x.strip()]
+
+
+def _parse_ints(csv_text: str) -> list[int]:
+    return [int(x.strip()) for x in csv_text.split(",") if x.strip()]
+
+
+def _scenario_matrix(args: argparse.Namespace) -> dict[str, dict[str, float | int]]:
+    scenarios: dict[str, dict[str, float | int]] = {}
+    winds = _parse_floats(args.wind_stds)
+    noises = _parse_floats(args.act_noise_stds)
+    latencies = _parse_ints(args.latency_steps)
+    for w in winds:
+        for n in noises:
+            for l in latencies:
+                key = f"w{w:.2f}_n{n:.2f}_l{l}"
+                scenarios[key] = {
+                    "wind_std": float(w),
+                    "act_noise_std": float(n),
+                    "latency_steps": int(l),
+                }
+    return scenarios
 
 
 def _evaluate_scenario(
@@ -175,7 +204,7 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    scenarios = _scenario_table()
+    scenarios = _scenario_table() if args.scenario_mode == "preset" else _scenario_matrix(args)
     out: dict[str, dict[str, float]] = {}
     for name, sc in scenarios.items():
         out[name] = _evaluate_scenario(model, features, actions, args, rng, sc)
