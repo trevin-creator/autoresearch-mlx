@@ -46,6 +46,7 @@ results*.tsv
 
 # Optuna / Verilator trial artifacts (generated locally)
 experiments/
+artifacts/
 
 
 # Local experiment / analysis scripts that are not part of the core package

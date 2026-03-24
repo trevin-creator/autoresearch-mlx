@@ -1,0 +1,92 @@
+name: Motor Mode Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - world_model_experiments/**
+      - .github/workflows/motor-smoke.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - world_model_experiments/**
+      - .github/workflows/motor-smoke.yml
+  workflow_dispatch:
+
+jobs:
+  motor-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy h5py torch onnx onnxruntime
+
+      - name: Build simulator motor dataset
+        run: |
+          python -m world_model_experiments.build_sim_rollout_dataset \
+            --output /tmp/ci_sim_motor_rollouts.h5 \
+            --num-sequences 32 \
+            --sequence-len 8 \
+            --feature-dim 79 \
+            --seed 0
+
+      - name: Train feature JEPA (motor mode)
+        run: |
+          python -m world_model_experiments.train_feature_lewm \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --output-dir /tmp/ci_feature_lewm_motor \
+            --epochs 1 \
+            --batch-size 8 \
+            --history-size 4 \
+            --embed-dim 32 \
+            --hidden-dim 64 \
+            --depth 1 \
+            --heads 4 \
+            --use-motor-commands
+
+      - name: Train informed Dreamer (motor mode)
+        run: |
+          python -m world_model_experiments.train_informed_dreamer \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --output-dir /tmp/ci_informed_dreamer_motor \
+            --epochs 1 \
+            --batch-size 8 \
+            --embed-dim 64 \
+            --hidden-dim 128 \
+            --horizon 4 \
+            --use-motor-commands
+
+      - name: Evaluate informed Dreamer (open-loop)
+        run: |
+          python -m world_model_experiments.evaluate_informed_dreamer \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/ci_informed_dreamer_motor/informed_dreamer_best.pt \
+            --use-motor-commands
+
+      - name: Evaluate informed Dreamer (closed-loop)
+        run: |
+          python -m world_model_experiments.evaluate_closed_loop_motor \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/ci_informed_dreamer_motor/informed_dreamer_best.pt \
+            --episodes 2 \
+            --horizon 4 \
+            --use-motor-commands
+
+      - name: Validate ONNX parity
+        run: |
+          python -m world_model_experiments.validate_motor_onnx_parity \
+            --checkpoint /tmp/ci_feature_lewm_motor/feature_lewm_best.pt \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --output /tmp/ci_feature_lewm_motor.onnx \
+            --use-motor-commands
