@@ -22,6 +22,7 @@ This folder provides a practical scaffold for your requested stack:
 - `informed_dreamer_model.py`: informed world model + reward/continue heads + actor-critic with smooth action regularization.
 - `train_informed_dreamer.py`: end-to-end training for the full informed Dreamer-style stack.
 - `evaluate_informed_dreamer.py`: evaluates privileged decoder and reward/continue prediction errors.
+- `run_informed_ablation.py`: one-command A/B run (with vs without flight-plan conditioning) and delta report.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -170,6 +171,12 @@ python -m world_model_experiments.evaluate_informed_dreamer \
   --dataset artifacts/tumvie/tumvie_features.h5 \
   --checkpoint artifacts/tumvie/informed_dreamer/informed_dreamer_best.pt \
   --use-flight-plan
+
+python -m world_model_experiments.run_informed_ablation \
+  --dataset artifacts/tumvie/tumvie_features.h5 \
+  --output-root artifacts/tumvie/informed_ablation \
+  --epochs 1 \
+  --batch-size 8
 ```
 
 ## Integrating real Tonic stereo+IMU data
