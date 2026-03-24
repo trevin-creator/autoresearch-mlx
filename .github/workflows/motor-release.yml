@@ -119,6 +119,26 @@ jobs:
             --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
             --use-motor-commands | tee /tmp/release_replay.log
 
+      - name: Sensor sync validation
+        run: |
+          python -m world_model_experiments.check_sensor_sync \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --max-jitter-us 5000 \
+            --max-gap-us 50000 | tee /tmp/release_sync.log
+
+      - name: OOD guard validation
+        run: |
+          python -m world_model_experiments.evaluate_ood_guard \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --z-threshold 4.0 \
+            --max-ood-rate 0.10 | tee /tmp/release_ood.log
+
+      - name: System identification fit
+        run: |
+          python -m world_model_experiments.fit_motor_dynamics \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --output /tmp/release_system_id.json | tee /tmp/release_system_id.log
+
       - name: Enforce release gates
         run: |
           python -m world_model_experiments.check_phase4_release_gates \
@@ -127,6 +147,9 @@ jobs:
             --runtime-log /tmp/release_runtime.log \
             --onnx-log /tmp/release_onnx.log \
             --replay-log /tmp/release_replay.log \
+            --sync-log /tmp/release_sync.log \
+            --ood-log /tmp/release_ood.log \
+            --system-id-log /tmp/release_system_id.log \
             --max-crash-rate 0.01 \
             --max-termination-rate 0.01 \
             --min-survival 0.95 \
@@ -134,7 +157,23 @@ jobs:
             --max-parity-diff 1e-4 \
             --max-replay-pose-delta-mse 0.01 \
             --max-replay-reward-mse 0.02 \
-            --max-shield-emergency-rate 0.01
+            --max-shield-emergency-rate 0.01 \
+            --max-sync-jitter-us 5000 \
+            --max-ood-rate 0.10 \
+            --min-system-id-corr 0.05
+
+      - name: Build verification matrix
+        if: always()
+        run: |
+          python -m world_model_experiments.generate_verification_matrix \
+            --closed-loop-log /tmp/release_closed_loop.log \
+            --robust-log /tmp/release_robust.log \
+            --runtime-log /tmp/release_runtime.log \
+            --replay-log /tmp/release_replay.log \
+            --sync-log /tmp/release_sync.log \
+            --ood-log /tmp/release_ood.log \
+            --system-id-log /tmp/release_system_id.log \
+            --output /tmp/phase5_verification_matrix.md
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -147,6 +186,11 @@ jobs:
             /tmp/release_onnx.log
             /tmp/release_runtime.log
             /tmp/release_replay.log
+            /tmp/release_sync.log
+            /tmp/release_ood.log
+            /tmp/release_system_id.log
+            /tmp/release_system_id.json
             /tmp/release_runtime_trend.csv
             /tmp/release_runtime_trend_repeats.csv
             /tmp/release_feature_lewm_runtime.onnx
+            /tmp/phase5_verification_matrix.md

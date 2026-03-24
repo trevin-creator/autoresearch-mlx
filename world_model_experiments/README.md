@@ -38,6 +38,11 @@ This folder provides a practical scaffold for your requested stack:
 - `run_motor_curriculum_train.py`: staged disturbance curriculum training runner for motor-mode informed Dreamer.
 - `validate_real_replay.py`: replay parity validator (predicted vs observed pose_delta/reward) with speed buckets.
 - `check_phase4_release_gates.py`: stricter release-grade gate checker across safety, robustness, runtime, parity, replay.
+- `command_interface.py`: normalized-command to PWM interface contract with bounded rate-limited outputs.
+- `check_sensor_sync.py`: timestamp monotonicity/jitter/gap checker for sequence datasets.
+- `evaluate_ood_guard.py`: feature-distribution OOD detector and fallback trigger-rate estimator.
+- `fit_motor_dynamics.py`: coarse system-identification utility for motor-to-motion gains and delay.
+- `generate_verification_matrix.py`: requirement-to-evidence markdown matrix generator from release logs.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -361,6 +366,31 @@ python -m world_model_experiments.check_phase4_release_gates \
   --max-replay-pose-delta-mse 0.01 \
   --max-replay-reward-mse 0.02 \
   --max-shield-emergency-rate 0.01
+
+python -m world_model_experiments.check_sensor_sync \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --max-jitter-us 5000 \
+  --max-gap-us 50000
+
+python -m world_model_experiments.evaluate_ood_guard \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --z-threshold 4.0 \
+  --max-ood-rate 0.10
+
+python -m world_model_experiments.fit_motor_dynamics \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --output artifacts/sim/system_id/motor_dynamics.json \
+  --max-delay 4
+
+python -m world_model_experiments.generate_verification_matrix \
+  --closed-loop-log /tmp/release_closed_loop.log \
+  --robust-log /tmp/release_robust.log \
+  --runtime-log /tmp/release_runtime.log \
+  --replay-log /tmp/release_replay.log \
+  --sync-log /tmp/release_sync.log \
+  --ood-log /tmp/release_ood.log \
+  --system-id-log /tmp/release_system_id.log \
+  --output artifacts/sim/verification/phase5_verification_matrix.md
 ```
 
 ## Integrating real Tonic stereo+IMU data
