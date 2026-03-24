@@ -16,6 +16,8 @@ This folder provides a practical scaffold for your requested stack:
 ## Files
 
 - `snn_feature_pipeline.py`: Spyx stereo/IMU feature extractor and HDF5 writer.
+- `tumvie_local.py`: local TUMVIE event/IMU reader for the existing dataset files in this repo.
+- `build_tumvie_feature_dataset.py`: CLI to generate feature/action HDF5 from real TUMVIE windows.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -82,6 +84,41 @@ Export ONNX:
 python -m world_model_experiments.export_onnx \
   --checkpoint artifacts/feature_lewm/feature_lewm_best.pt \
   --output artifacts/feature_lewm/feature_lewm.onnx
+```
+
+## Real TUMVIE run
+
+This repo already contains local TUMVIE files under `spyx/research/data/TUMVIE/mocap-6dof/`.
+The local builder reads:
+
+- `mocap-6dof-events_left.h5`
+- `mocap-6dof-events_right.h5`
+- `imu_data.txt`
+- `mocap_data.txt`
+
+and builds windowed stereo-event + IMU sequences without triggering Tonic downloads.
+
+```bash
+python -m world_model_experiments.build_tumvie_feature_dataset \
+  --recording-dir spyx/research/data/TUMVIE/mocap-6dof \
+  --output artifacts/tumvie/tumvie_features.h5 \
+  --sample-t 4 \
+  --window-us 20000 \
+  --stride-us 40000 \
+  --downsample-factor 0.05 \
+  --max-windows 16 \
+  --sequence-len 4
+
+python -m world_model_experiments.train_feature_lewm \
+  --dataset artifacts/tumvie/tumvie_features.h5 \
+  --output-dir artifacts/tumvie/feature_lewm \
+  --epochs 1 \
+  --batch-size 2 \
+  --history-size 2 \
+  --embed-dim 32 \
+  --hidden-dim 64 \
+  --depth 1 \
+  --heads 4
 ```
 
 ## Integrating real Tonic stereo+IMU data
