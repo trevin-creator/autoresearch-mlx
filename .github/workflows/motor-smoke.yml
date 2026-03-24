@@ -90,3 +90,21 @@ jobs:
             --dataset /tmp/ci_sim_motor_rollouts.h5 \
             --output /tmp/ci_feature_lewm_motor.onnx \
             --use-motor-commands
+
+      - name: Evaluate robustness scenarios
+        run: |
+          python -m world_model_experiments.evaluate_motor_robustness \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/ci_informed_dreamer_motor/informed_dreamer_best.pt \
+            --episodes 2 \
+            --horizon 4 \
+            --use-motor-commands
+
+      - name: Benchmark ONNX runtime
+        run: |
+          python -m world_model_experiments.benchmark_motor_onnx_runtime \
+            --checkpoint /tmp/ci_feature_lewm_motor/feature_lewm_best.pt \
+            --dataset /tmp/ci_sim_motor_rollouts.h5 \
+            --output /tmp/ci_feature_lewm_motor_runtime.onnx \
+            --batches 4 \
+            --use-motor-commands

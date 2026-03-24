@@ -17,6 +17,10 @@ class CEMConfig:
     action_low: float = -1.0
     action_high: float = 1.0
     max_action_delta: float | None = None
+    action_slew_penalty: float = 0.0
+    action_energy_penalty: float = 0.0
+    rollout_norm_limit: float | None = None
+    invalid_cost: float = 1e6
 
 
 @torch.no_grad()
@@ -52,6 +56,19 @@ def plan_actions_cem(
         rollout = model.rollout_embeddings(hist, actions)
         final = rollout[:, -1]
         cost = torch.sum((final - goal_embedding.expand_as(final)) ** 2, dim=-1)
+
+        if cfg.action_slew_penalty > 0.0 and cfg.horizon > 1:
+            slew = torch.mean(torch.abs(actions[:, 1:] - actions[:, :-1]), dim=(1, 2))
+            cost = cost + cfg.action_slew_penalty * slew
+
+        if cfg.action_energy_penalty > 0.0:
+            energy = torch.mean(actions * actions, dim=(1, 2))
+            cost = cost + cfg.action_energy_penalty * energy
+
+        if cfg.rollout_norm_limit is not None and cfg.rollout_norm_limit > 0.0:
+            rollout_norm = torch.mean(torch.linalg.norm(rollout, dim=-1), dim=-1)
+            invalid = rollout_norm > cfg.rollout_norm_limit
+            cost = torch.where(invalid, torch.full_like(cost, cfg.invalid_cost), cost)
 
         elite_idx = torch.topk(cost, k=cfg.elites, largest=False).indices
         elite = actions[elite_idx]

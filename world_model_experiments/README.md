@@ -30,6 +30,9 @@ This folder provides a practical scaffold for your requested stack:
 - `evaluate_closed_loop_motor.py`: closed-loop simulator evaluation with crash/smoothness metrics.
 - `run_motor_multiseed_report.py`: motor-mode multiseed train+eval pipeline producing CSV/Markdown artifacts.
 - `validate_motor_onnx_parity.py`: PyTorch vs ONNXRuntime parity check for motor-mode JEPA predictor.
+- `evaluate_motor_robustness.py`: disturbance robustness evaluator across calm/wind/gust/noisy scenarios.
+- `run_motor_robustness_report.py`: per-seed robustness aggregator that writes CSV/Markdown artifacts.
+- `benchmark_motor_onnx_runtime.py`: runtime latency/jitter and parity stress benchmark for ONNXRuntime.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -244,6 +247,28 @@ python -m world_model_experiments.run_motor_multiseed_report \
   --seeds 0,1,2 \
   --epochs 3 \
   --batch-size 16
+
+python -m world_model_experiments.evaluate_motor_robustness \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --episodes 8 \
+  --horizon 8 \
+  --use-motor-commands
+
+python -m world_model_experiments.run_motor_robustness_report \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint-root artifacts/sim/motor_multiseed \
+  --output-root artifacts/sim/motor_robustness \
+  --seeds 0,1,2 \
+  --episodes 8 \
+  --horizon 8
+
+python -m world_model_experiments.benchmark_motor_onnx_runtime \
+  --checkpoint artifacts/sim/feature_lewm_motor/feature_lewm_best.pt \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --output artifacts/sim/feature_lewm_motor/feature_lewm_motor_runtime.onnx \
+  --batches 16 \
+  --use-motor-commands
 ```
 
 ## Integrating real Tonic stereo+IMU data
