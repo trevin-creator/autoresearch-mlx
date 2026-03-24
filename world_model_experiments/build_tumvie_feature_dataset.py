@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--downsample-factor", type=float, default=0.1)
     parser.add_argument("--max-windows", type=int, default=64)
     parser.add_argument("--sequence-len", type=int, default=8)
+    parser.add_argument("--flight-plan-horizon", type=int, default=3)
     parser.add_argument("--stereo-channels", type=int, default=12)
     parser.add_argument("--visual-channels1", type=int, default=12)
     parser.add_argument("--visual-channels2", type=int, default=16)
@@ -41,6 +42,7 @@ def main() -> None:
         stride_us=args.stride_us,
         downsample_factor=args.downsample_factor,
         max_windows=args.max_windows,
+        flight_plan_horizon=args.flight_plan_horizon,
     )
     snn_cfg = SnnFeatureConfig(
         input_hw=(input_h, input_w),

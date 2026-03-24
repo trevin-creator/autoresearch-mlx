@@ -99,6 +99,13 @@ The local builder reads:
 
 and builds windowed stereo-event + IMU sequences without triggering Tonic downloads.
 
+Adaptation from SkyDreamer:
+
+- We add a flight-plan vector that encodes future relative and absolute waypoints
+  (position + yaw) over a configurable horizon.
+- This vector is stored as `flight_plan` in the dataset and can be concatenated to
+  `actions` during training and probing using `--use-flight-plan`.
+
 ```bash
 python -m world_model_experiments.build_tumvie_feature_dataset \
   --recording-dir spyx/research/data/TUMVIE/mocap-6dof \
@@ -108,7 +115,8 @@ python -m world_model_experiments.build_tumvie_feature_dataset \
   --stride-us 40000 \
   --downsample-factor 0.05 \
   --max-windows 16 \
-  --sequence-len 4
+  --sequence-len 4 \
+  --flight-plan-horizon 3
 
 python -m world_model_experiments.train_feature_lewm \
   --dataset artifacts/tumvie/tumvie_features.h5 \
@@ -119,11 +127,13 @@ python -m world_model_experiments.train_feature_lewm \
   --embed-dim 32 \
   --hidden-dim 64 \
   --depth 1 \
-  --heads 4
+  --heads 4 \
+  --use-flight-plan
 
 python -m world_model_experiments.evaluate_tumvie_probe \
   --dataset artifacts/tumvie/tumvie_features.h5 \
-  --checkpoint artifacts/tumvie/feature_lewm/feature_lewm_best.pt
+  --checkpoint artifacts/tumvie/feature_lewm/feature_lewm_best.pt \
+  --use-flight-plan
 ```
 
 The generated TUMVIE HDF5 now includes:
@@ -133,6 +143,7 @@ The generated TUMVIE HDF5 now includes:
 - `pose`: aligned 6DOF pose
 - `pose_delta`: aligned pose change between accepted windows
 - `timestamps_us`: original recording timestamps
+- `flight_plan`: future relative+absolute waypoint summary (SkyDreamer-style adaptation)
 
 ## Integrating real Tonic stereo+IMU data
 

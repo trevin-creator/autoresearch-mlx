@@ -27,6 +27,7 @@ class TumvieWindowConfig:
     downsample_factor: float = 0.1
     max_windows: int = 64
     imu_dim: int = 6
+    flight_plan_horizon: int = 3
 
 
 @dataclass(frozen=True)
@@ -232,6 +233,23 @@ def build_tumvie_feature_dataset(
         pose_delta_per_window.append(sample.pose_delta.astype(np.float32))
         timestamps_per_window.append(sample.end_us)
 
+    # SkyDreamer-style flight-plan logic adapted to trajectory windows:
+    # for each future step, encode relative and absolute waypoint (position + yaw).
+    horizon = max(1, int(tumvie_cfg.flight_plan_horizon))
+    flight_plan_per_window: list[np.ndarray] = []
+    for i in range(len(pose_per_window)):
+        curr = pose_per_window[i]
+        blocks: list[np.ndarray] = []
+        for k in range(1, horizon + 1):
+            j = min(i + k, len(pose_per_window) - 1)
+            nxt = pose_per_window[j]
+            rel_pos = (nxt[:3] - curr[:3]).astype(np.float32)
+            rel_yaw = np.asarray([nxt[5] - curr[5]], dtype=np.float32)
+            abs_pos = nxt[:3].astype(np.float32)
+            abs_yaw = np.asarray([nxt[5]], dtype=np.float32)
+            blocks.append(np.concatenate([rel_pos, rel_yaw, abs_pos, abs_yaw], axis=0))
+        flight_plan_per_window.append(np.concatenate(blocks, axis=0).astype(np.float32))
+
     if len(features_per_window) < sequence_len:
         raise ValueError("No TUMVIE sequences were generated; try increasing max_windows or reducing sequence_len.")
 
@@ -240,6 +258,7 @@ def build_tumvie_feature_dataset(
     seq_pose = []
     seq_pose_delta = []
     seq_timestamps = []
+    seq_flight_plan = []
     for start in range(0, len(features_per_window) - sequence_len + 1, sequence_len):
         end = start + sequence_len
         seq_features.append(np.stack(features_per_window[start:end], axis=0))
@@ -247,6 +266,7 @@ def build_tumvie_feature_dataset(
         seq_pose.append(np.stack(pose_per_window[start:end], axis=0))
         seq_pose_delta.append(np.stack(pose_delta_per_window[start:end], axis=0))
         seq_timestamps.append(np.asarray(timestamps_per_window[start:end], dtype=np.int64))
+        seq_flight_plan.append(np.stack(flight_plan_per_window[start:end], axis=0))
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -256,4 +276,5 @@ def build_tumvie_feature_dataset(
         h5.create_dataset("pose", data=np.stack(seq_pose, axis=0), compression="gzip")
         h5.create_dataset("pose_delta", data=np.stack(seq_pose_delta, axis=0), compression="gzip")
         h5.create_dataset("timestamps_us", data=np.stack(seq_timestamps, axis=0), compression="gzip")
+        h5.create_dataset("flight_plan", data=np.stack(seq_flight_plan, axis=0), compression="gzip")
     return output

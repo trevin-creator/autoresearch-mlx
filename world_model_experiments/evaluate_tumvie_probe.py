@@ -16,16 +16,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--ridge", type=float, default=1e-3)
     parser.add_argument("--train-frac", type=float, default=0.8)
+    parser.add_argument("--use-flight-plan", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     return parser.parse_args()
 
 
-def _load_dataset(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _load_dataset(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     with h5py.File(path, "r") as h5:
         features = np.asarray(h5["features"], dtype=np.float32)
         actions = np.asarray(h5["actions"], dtype=np.float32)
         pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-    return features, actions, pose_delta
+        flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
+    return features, actions, pose_delta, flight_plan
 
 
 def _encode_embeddings(model: FeatureJEPA, features: np.ndarray, actions: np.ndarray) -> np.ndarray:
@@ -57,7 +59,11 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    features, actions, pose_delta = _load_dataset(args.dataset)
+    features, actions, pose_delta, flight_plan = _load_dataset(args.dataset)
+    if args.use_flight_plan:
+        if flight_plan is None:
+            raise ValueError("--use-flight-plan set but dataset has no flight_plan key")
+        actions = np.concatenate([actions, flight_plan], axis=-1)
     emb = _encode_embeddings(model, features, actions)
 
     x = emb.reshape(-1, emb.shape[-1])

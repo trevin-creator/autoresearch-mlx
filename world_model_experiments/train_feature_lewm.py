@@ -16,6 +16,7 @@ class FeatureSequenceDataset(Dataset):
         with h5py.File(h5_path, "r") as h5:
             self.features = np.asarray(h5["features"], dtype=np.float32)
             self.actions = np.asarray(h5["actions"], dtype=np.float32)
+            self.flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
 
         if self.features.shape[0] != self.actions.shape[0]:
             raise ValueError("features/actions sequence counts do not match")
@@ -24,10 +25,13 @@ class FeatureSequenceDataset(Dataset):
         return self.features.shape[0]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        return {
+        sample = {
             "features": torch.from_numpy(self.features[idx]),
             "actions": torch.from_numpy(self.actions[idx]),
         }
+        if self.flight_plan is not None:
+            sample["flight_plan"] = torch.from_numpy(self.flight_plan[idx])
+        return sample
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--depth", type=int, default=4)
     p.add_argument("--heads", type=int, default=8)
     p.add_argument("--sigreg-weight", type=float, default=10.0)
+    p.add_argument("--use-flight-plan", action="store_true", help="Concatenate flight_plan with actions")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
@@ -65,6 +70,10 @@ def train() -> None:
     sample = ds[0]
     feature_dim = int(sample["features"].shape[-1])
     action_dim = int(sample["actions"].shape[-1])
+    if args.use_flight_plan:
+        if "flight_plan" not in sample:
+            raise ValueError("--use-flight-plan set but dataset has no flight_plan key")
+        action_dim += int(sample["flight_plan"].shape[-1])
 
     cfg = FeatureLeWmConfig(
         feature_dim=feature_dim,
@@ -94,6 +103,8 @@ def train() -> None:
         for batch in train_loader:
             feat = batch["features"].to(device)
             act = batch["actions"].to(device)
+            if args.use_flight_plan:
+                act = torch.cat([act, batch["flight_plan"].to(device)], dim=-1)
             losses = model.compute_loss(feat, act)
             loss = losses["loss"]
 
@@ -110,6 +121,8 @@ def train() -> None:
             for batch in val_loader:
                 feat = batch["features"].to(device)
                 act = batch["actions"].to(device)
+                if args.use_flight_plan:
+                    act = torch.cat([act, batch["flight_plan"].to(device)], dim=-1)
                 loss = model.compute_loss(feat, act)["loss"]
                 val_losses.append(float(loss.item()))
 
