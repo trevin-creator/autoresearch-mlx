@@ -56,7 +56,9 @@ def main() -> None:
     rewards = []
     action_mags = []
     action_slew = []
+    action_energy = []
     crash_flags = []
+    rollout_survival = []
     pose_errors = []
 
     for ep in range(n_eps):
@@ -74,8 +76,10 @@ def main() -> None:
         ep_reward = 0.0
         ep_mag = []
         ep_slew = []
+        ep_energy = []
         crashed = False
         ep_pose_err = []
+        survived_steps = 0
 
         for _ in range(args.horizon):
             with torch.no_grad():
@@ -98,6 +102,7 @@ def main() -> None:
 
             ep_reward += float(out["reward"])
             ep_mag.append(float(np.mean(np.abs(motor_cmd))))
+            ep_energy.append(float(np.mean(np.square(motor_cmd))))
             if prev is not None:
                 ep_slew.append(float(np.mean(np.abs(motor_cmd - prev))))
             prev = motor_cmd
@@ -108,13 +113,17 @@ def main() -> None:
                 crashed = True
                 break
 
+            survived_steps += 1
+
             pred_pose_np = model.pose_head(torch.cat([h, z], dim=-1))[0].detach().cpu().numpy()
             ep_pose_err.append(float(np.mean((pred_pose_np - out["pose"]) ** 2)))
 
         rewards.append(ep_reward)
         action_mags.append(float(np.mean(ep_mag)) if ep_mag else 0.0)
         action_slew.append(float(np.mean(ep_slew)) if ep_slew else 0.0)
+        action_energy.append(float(np.mean(ep_energy)) if ep_energy else 0.0)
         crash_flags.append(1.0 if crashed else 0.0)
+        rollout_survival.append(float(survived_steps / max(1, args.horizon)))
         pose_errors.append(float(np.mean(ep_pose_err)) if ep_pose_err else 0.0)
 
     result = {
@@ -122,7 +131,10 @@ def main() -> None:
         "reward_sum_mean": float(np.mean(rewards)) if rewards else 0.0,
         "action_abs_mean": float(np.mean(action_mags)) if action_mags else 0.0,
         "action_slew_mean": float(np.mean(action_slew)) if action_slew else 0.0,
+        "energy_proxy_mean": float(np.mean(action_energy)) if action_energy else 0.0,
         "crash_rate": float(np.mean(crash_flags)) if crash_flags else 0.0,
+        "termination_rate": float(np.mean(crash_flags)) if crash_flags else 0.0,
+        "rollout_survival_mean": float(np.mean(rollout_survival)) if rollout_survival else 0.0,
         "pose_mse_sim_mean": float(np.mean(pose_errors)) if pose_errors else 0.0,
     }
     print("closed_loop_eval", result)
