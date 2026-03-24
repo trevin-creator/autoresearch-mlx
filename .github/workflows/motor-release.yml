@@ -74,7 +74,8 @@ jobs:
             --episodes 8 \
             --horizon 8 \
             --use-motor-commands \
-            --use-safety-shield | tee /tmp/release_closed_loop.log
+            --use-safety-shield \
+            --telemetry-output /tmp/release_closed_loop_telemetry.jsonl | tee /tmp/release_closed_loop.log
 
       - name: Robustness matrix eval
         run: |
@@ -126,7 +127,21 @@ jobs:
             --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
             --episodes 8 \
             --ood-threshold 0.10 \
-            --use-motor-commands | tee /tmp/release_shadow.log
+            --use-motor-commands \
+            --telemetry-output /tmp/release_shadow_telemetry.jsonl | tee /tmp/release_shadow.log
+
+      - name: Fault-injection replay
+        run: |
+          python -m world_model_experiments.evaluate_fault_injection_replay \
+            --dataset /tmp/release_sim_motor_rollouts.h5 \
+            --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
+            --episodes 8 \
+            --ood-threshold 0.10 \
+            --fault-mode stuck_low \
+            --fault-strength 0.7 \
+            --fault-start-step 2 \
+            --use-motor-commands \
+            --telemetry-output /tmp/release_fault_telemetry.jsonl | tee /tmp/release_fault.log
 
       - name: Sensor sync validation
         run: |
@@ -148,6 +163,17 @@ jobs:
             --dataset /tmp/release_sim_motor_rollouts.h5 \
             --output /tmp/release_system_id.json | tee /tmp/release_system_id.log
 
+      - name: Generate deployment manifest
+        run: |
+          python -m world_model_experiments.generate_deployment_manifest \
+            --checkpoint /tmp/release_informed_dreamer_motor/informed_dreamer_best.pt \
+            --onnx-model /tmp/release_feature_lewm_runtime.onnx \
+            --release-gates-log /tmp/release_closed_loop.log \
+            --shadow-log /tmp/release_shadow.log \
+            --fault-log /tmp/release_fault.log \
+            --version-tag main-${{ github.sha }} \
+            --output /tmp/release_deployment_manifest.json
+
       - name: Enforce release gates
         run: |
           python -m world_model_experiments.check_phase4_release_gates \
@@ -157,9 +183,11 @@ jobs:
             --onnx-log /tmp/release_onnx.log \
             --replay-log /tmp/release_replay.log \
             --shadow-log /tmp/release_shadow.log \
+            --fault-log /tmp/release_fault.log \
             --sync-log /tmp/release_sync.log \
             --ood-log /tmp/release_ood.log \
             --system-id-log /tmp/release_system_id.log \
+            --manifest-path /tmp/release_deployment_manifest.json \
             --max-crash-rate 0.01 \
             --max-termination-rate 0.01 \
             --min-survival 0.95 \
@@ -171,6 +199,9 @@ jobs:
             --max-shadow-emergency-rate 0.01 \
             --min-shadow-autonomous-rate 0.50 \
             --max-shadow-emergency-stop-rate 0.01 \
+            --min-fault-fallback-rate 0.60 \
+            --max-fault-emergency-stop-rate 0.01 \
+            --max-fault-shield-emergency-rate 0.01 \
             --max-shield-emergency-rate 0.01 \
             --max-sync-jitter-us 5000 \
             --max-ood-rate 0.10 \
@@ -185,6 +216,8 @@ jobs:
             --runtime-log /tmp/release_runtime.log \
             --replay-log /tmp/release_replay.log \
             --shadow-log /tmp/release_shadow.log \
+            --fault-log /tmp/release_fault.log \
+            --manifest-path /tmp/release_deployment_manifest.json \
             --sync-log /tmp/release_sync.log \
             --ood-log /tmp/release_ood.log \
             --system-id-log /tmp/release_system_id.log \
@@ -202,10 +235,15 @@ jobs:
             /tmp/release_runtime.log
             /tmp/release_replay.log
             /tmp/release_shadow.log
+            /tmp/release_fault.log
             /tmp/release_sync.log
             /tmp/release_ood.log
             /tmp/release_system_id.log
             /tmp/release_system_id.json
+            /tmp/release_deployment_manifest.json
+            /tmp/release_closed_loop_telemetry.jsonl
+            /tmp/release_shadow_telemetry.jsonl
+            /tmp/release_fault_telemetry.jsonl
             /tmp/release_runtime_trend.csv
             /tmp/release_runtime_trend_repeats.csv
             /tmp/release_feature_lewm_runtime.onnx

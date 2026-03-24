@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,9 +16,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--onnx-log", type=str, required=True)
     p.add_argument("--replay-log", type=str, required=True)
     p.add_argument("--shadow-log", type=str, required=True)
+    p.add_argument("--fault-log", type=str, required=True)
     p.add_argument("--sync-log", type=str, required=True)
     p.add_argument("--ood-log", type=str, required=True)
     p.add_argument("--system-id-log", type=str, required=True)
+    p.add_argument("--manifest-path", type=str, required=True)
 
     p.add_argument("--max-crash-rate", type=float, default=0.01)
     p.add_argument("--max-termination-rate", type=float, default=0.01)
@@ -30,6 +33,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-shadow-emergency-rate", type=float, default=0.01)
     p.add_argument("--min-shadow-autonomous-rate", type=float, default=0.5)
     p.add_argument("--max-shadow-emergency-stop-rate", type=float, default=0.01)
+    p.add_argument("--min-fault-fallback-rate", type=float, default=0.6)
+    p.add_argument("--max-fault-emergency-stop-rate", type=float, default=0.01)
+    p.add_argument("--max-fault-shield-emergency-rate", type=float, default=0.01)
     p.add_argument("--max-shield-emergency-rate", type=float, default=0.01)
     p.add_argument("--max-sync-jitter-us", type=float, default=5000.0)
     p.add_argument("--max-ood-rate", type=float, default=0.10)
@@ -86,6 +92,16 @@ def _fail_if(cond: bool, msg: str, failures: list[str]) -> None:
         failures.append(msg)
 
 
+def _load_manifest(path: str) -> dict[str, Any]:
+    try:
+        raw = json.loads(Path(path).read_text())
+    except (OSError, JSONDecodeError):
+        return {}
+    if isinstance(raw, dict):
+        return cast(dict[str, Any], raw)
+    return {}
+
+
 def main() -> None:
     args = parse_args()
 
@@ -95,9 +111,11 @@ def main() -> None:
     onnx = _parse_dict(_read_lines(args.onnx_log), "onnx_parity")
     replay = _parse_dict(_read_lines(args.replay_log), "real_replay_eval")
     shadow = _parse_dict(_read_lines(args.shadow_log), "shadow_mode_eval")
+    fault = _parse_dict(_read_lines(args.fault_log), "fault_replay_eval")
     sync = _parse_dict(_read_lines(args.sync_log), "sensor_sync")
     ood = _parse_dict(_read_lines(args.ood_log), "ood_guard")
     sid = _parse_dict(_read_lines(args.system_id_log), "system_id")
+    manifest = _load_manifest(args.manifest_path)
 
     failures: list[str] = []
 
@@ -154,11 +172,46 @@ def main() -> None:
         "shadow emergency-stop rate too high",
         failures,
     )
+    _fail_if(
+        fault.get("fallback_rate", 0.0) < args.min_fault_fallback_rate,
+        "fault replay fallback rate too low",
+        failures,
+    )
+    _fail_if(
+        fault.get("emergency_stop_rate", 1e9) > args.max_fault_emergency_stop_rate,
+        "fault replay emergency-stop rate too high",
+        failures,
+    )
+    _fail_if(
+        fault.get("shield_emergency_rate", 1e9) > args.max_fault_shield_emergency_rate,
+        "fault replay shield emergency rate too high",
+        failures,
+    )
     _fail_if(sync.get("pass", 0.0) < 1.0, "sensor sync failed", failures)
     _fail_if(sync.get("jitter_p95_us", 1e9) > args.max_sync_jitter_us, "sensor sync jitter too high", failures)
     _fail_if(ood.get("pass", 0.0) < 1.0, "ood guard failed", failures)
     _fail_if(ood.get("frame_ood_rate", 1e9) > args.max_ood_rate, "ood rate too high", failures)
     _fail_if(sid.get("corr_velocity", -1.0) < args.min_system_id_corr, "system-id corr_velocity too low", failures)
+
+    model_block = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
+    ckpt_hash = model_block.get("checkpoint_sha256") if isinstance(model_block, dict) else None
+    onnx_hash = model_block.get("onnx_sha256") if isinstance(model_block, dict) else None
+    _fail_if(not bool(ckpt_hash), "deployment manifest missing checkpoint hash", failures)
+    _fail_if(not bool(onnx_hash), "deployment manifest missing onnx hash", failures)
+
+    thresholds = manifest.get("gate_thresholds") if isinstance(manifest.get("gate_thresholds"), dict) else {}
+    _fail_if(not isinstance(thresholds, dict), "deployment manifest missing gate_thresholds", failures)
+    if isinstance(thresholds, dict):
+        _fail_if(
+            abs(float(thresholds.get("min_fault_fallback_rate", -1.0)) - args.min_fault_fallback_rate) > 1e-9,
+            "deployment manifest threshold mismatch: min_fault_fallback_rate",
+            failures,
+        )
+        _fail_if(
+            abs(float(thresholds.get("max_fault_emergency_stop_rate", -1.0)) - args.max_fault_emergency_stop_rate) > 1e-9,
+            "deployment manifest threshold mismatch: max_fault_emergency_stop_rate",
+            failures,
+        )
 
     if failures:
         print("phase4_release_gates FAILED")

@@ -13,6 +13,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--runtime-log", type=str, required=True)
     p.add_argument("--replay-log", type=str, required=True)
     p.add_argument("--shadow-log", type=str, required=True)
+    p.add_argument("--fault-log", type=str, required=True)
+    p.add_argument("--manifest-path", type=str, required=True)
     p.add_argument("--sync-log", type=str, required=True)
     p.add_argument("--ood-log", type=str, required=True)
     p.add_argument("--system-id-log", type=str, required=True)
@@ -52,6 +54,13 @@ def _status(ok: bool) -> str:
     return "PASS" if ok else "FAIL"
 
 
+def _read_json(path: str) -> dict[str, object]:
+    raw = json.loads(Path(path).read_text())
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
 def main() -> None:
     args = parse_args()
     closed = _parse_dict(_read(args.closed_loop_log), "closed_loop_eval")
@@ -59,6 +68,11 @@ def main() -> None:
     runtime = _parse_dict(_read(args.runtime_log), "runtime_benchmark")
     replay = _parse_dict(_read(args.replay_log), "real_replay_eval")
     shadow = _parse_dict(_read(args.shadow_log), "shadow_mode_eval")
+    fault = _parse_dict(_read(args.fault_log), "fault_replay_eval")
+    manifest = _read_json(args.manifest_path)
+    model_block = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
+    has_ckpt_hash = bool(model_block.get("checkpoint_sha256")) if isinstance(model_block, dict) else False
+    has_onnx_hash = bool(model_block.get("onnx_sha256")) if isinstance(model_block, dict) else False
     sync = _parse_dict(_read(args.sync_log), "sensor_sync")
     ood = _parse_dict(_read(args.ood_log), "ood_guard")
     sid = _parse_dict(_read(args.system_id_log), "system_id")
@@ -106,6 +120,16 @@ def main() -> None:
             "R9 Flight-mode progression",
             _status(shadow.get("autonomous_rate", 0.0) >= 0.5 and shadow.get("emergency_stop_rate", 1.0) <= 0.01),
             f"autonomous_rate={shadow.get('autonomous_rate', -1):.6f}, emergency_stop_rate={shadow.get('emergency_stop_rate', -1):.6f}",
+        ),
+        (
+            "R10 Fault-arbitration resilience",
+            _status(fault.get("fallback_rate", 0.0) >= 0.6 and fault.get("emergency_stop_rate", 1.0) <= 0.01),
+            f"fault_fallback_rate={fault.get('fallback_rate', -1):.6f}, fault_emergency_stop_rate={fault.get('emergency_stop_rate', -1):.6f}",
+        ),
+        (
+            "R11 Deployment manifest pinned",
+            _status(has_ckpt_hash and has_onnx_hash),
+            f"version_tag={manifest.get('version_tag', 'unknown')}, release_gate_passed={manifest.get('release_gate_passed', False)}",
         ),
     ]
 

@@ -43,6 +43,9 @@ This folder provides a practical scaffold for your requested stack:
 - `evaluate_ood_guard.py`: feature-distribution OOD detector and fallback trigger-rate estimator.
 - `fit_motor_dynamics.py`: coarse system-identification utility for motor-to-motion gains and delay.
 - `generate_verification_matrix.py`: requirement-to-evidence markdown matrix generator from release logs.
+- `evaluate_fault_injection_replay.py`: actuator fault-injection replay for fallback/arbitration resilience checks.
+- `generate_deployment_manifest.py`: pinned deployment manifest writer with hashes, thresholds, and evidence summaries.
+- `telemetry.py`: JSONL telemetry logger for replay and closed-loop runtime traces.
 - `flight_state_machine.py`: explicit shadow/autonomous/fallback/emergency mode controller with flight-plan decoding.
 - `fallback_controller.py`: conservative low-authority hover/land fallback controller.
 - `autopilot_bridge.py`: planner/fallback arbitration plus safety shield and PWM command packet bridge.
@@ -403,7 +406,28 @@ python -m world_model_experiments.run_shadow_mode_replay \
   --episodes 8 \
   --ood-threshold 0.10 \
   --shadow-warmup-steps 4 \
+  --telemetry-output artifacts/sim/telemetry/shadow_replay.jsonl \
   --use-motor-commands
+
+python -m world_model_experiments.evaluate_fault_injection_replay \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --episodes 8 \
+  --ood-threshold 0.10 \
+  --fault-mode stuck_low \
+  --fault-strength 0.7 \
+  --fault-start-step 2 \
+  --telemetry-output artifacts/sim/telemetry/fault_replay.jsonl \
+  --use-motor-commands
+
+python -m world_model_experiments.generate_deployment_manifest \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --onnx-model artifacts/sim/feature_lewm_motor/feature_lewm_motor_runtime.onnx \
+  --release-gates-log /tmp/release_gate.log \
+  --shadow-log /tmp/release_shadow.log \
+  --fault-log /tmp/release_fault.log \
+  --version-tag local-dev \
+  --output artifacts/sim/release/deployment_manifest.json
 
 python -m world_model_experiments.check_phase4_release_gates \
   --closed-loop-log /tmp/release_closed_loop.log \
@@ -412,13 +436,17 @@ python -m world_model_experiments.check_phase4_release_gates \
   --onnx-log /tmp/release_onnx.log \
   --replay-log /tmp/release_replay.log \
   --shadow-log /tmp/release_shadow.log \
+  --fault-log /tmp/release_fault.log \
   --sync-log /tmp/release_sync.log \
   --ood-log /tmp/release_ood.log \
   --system-id-log /tmp/release_system_id.log \
+  --manifest-path /tmp/release_deployment_manifest.json \
   --max-shadow-fallback-rate 0.50 \
   --max-shadow-emergency-rate 0.01 \
   --min-shadow-autonomous-rate 0.50 \
-  --max-shadow-emergency-stop-rate 0.01
+  --max-shadow-emergency-stop-rate 0.01 \
+  --min-fault-fallback-rate 0.60 \
+  --max-fault-emergency-stop-rate 0.01
 ```
 
 ## Integrating real Tonic stereo+IMU data

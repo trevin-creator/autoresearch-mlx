@@ -10,6 +10,7 @@ from world_model_experiments.informed_dreamer_model import InformedDreamerConfig
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
 from world_model_experiments.safety_shield import SafetyShieldConfig, apply_safety_shield
+from world_model_experiments.telemetry import TelemetryLogger
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--shield-max-slew", type=float, default=0.2)
     p.add_argument("--shield-max-abs-cmd", type=float, default=1.0)
     p.add_argument("--shield-emergency-stop-norm", type=float, default=30.0)
+    p.add_argument("--telemetry-output", type=str, default="")
     return p.parse_args()
 
 
@@ -57,6 +59,7 @@ def main() -> None:
     model.eval()
 
     n_eps = min(args.episodes, features.shape[0])
+    telemetry = TelemetryLogger(args.telemetry_output) if args.telemetry_output else None
 
     rewards = []
     action_mags = []
@@ -96,7 +99,11 @@ def main() -> None:
             emergency_stop_norm=args.shield_emergency_stop_norm,
         )
 
-        for _ in range(args.horizon):
+        for t in range(args.horizon):
+            shield = {
+                "modified": 0.0,
+                "emergency_stop": 0.0,
+            }
             with torch.no_grad():
                 s = torch.cat([h, z], dim=-1)
                 actor_out = model.actor(s)
@@ -119,6 +126,21 @@ def main() -> None:
                 ep_shield_modified += float(shield["modified"])
                 ep_shield_emergency += float(shield["emergency_stop"])
             out = sim.step(motor_cmd)
+
+            if telemetry is not None:
+                telemetry.log(
+                    {
+                        "kind": "closed_loop_step",
+                        "episode": ep,
+                        "step": t,
+                        "motor_cmd": motor_cmd,
+                        "reward": float(out["reward"]),
+                        "position": out["pose"][:3],
+                        "euler": out["pose"][3:],
+                        "shield_modified": float(shield["modified"]),
+                        "shield_emergency": float(shield["emergency_stop"]),
+                    }
+                )
 
             ep_reward += float(out["reward"])
             ep_mag.append(float(np.mean(np.abs(motor_cmd))))
@@ -147,6 +169,9 @@ def main() -> None:
         pose_errors.append(float(np.mean(ep_pose_err)) if ep_pose_err else 0.0)
         shield_modified.append(ep_shield_modified / max(1, args.horizon))
         shield_emergency.append(ep_shield_emergency / max(1, args.horizon))
+
+    if telemetry is not None:
+        telemetry.close()
 
     result = {
         "episodes": float(n_eps),
