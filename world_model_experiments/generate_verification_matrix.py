@@ -102,6 +102,11 @@ def main() -> None:
             _status(shadow.get("shield_emergency_rate", 1.0) <= 0.01),
             f"fallback_rate={shadow.get('fallback_rate', -1):.6f}, shield_emergency_rate={shadow.get('shield_emergency_rate', -1):.6f}",
         ),
+        (
+            "R9 Flight-mode progression",
+            _status(shadow.get("autonomous_rate", 0.0) >= 0.5 and shadow.get("emergency_stop_rate", 1.0) <= 0.01),
+            f"autonomous_rate={shadow.get('autonomous_rate', -1):.6f}, emergency_stop_rate={shadow.get('emergency_stop_rate', -1):.6f}",
+        ),
     ]
 
     out = Path(args.output)

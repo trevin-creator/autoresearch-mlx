@@ -10,6 +10,7 @@ import torch
 from world_model_experiments.autopilot_bridge import ArbitrationConfig, MotorAutopilotBridge
 from world_model_experiments.command_interface import CommandInterfaceConfig
 from world_model_experiments.fallback_controller import ConservativeFallbackController, FallbackControllerConfig
+from world_model_experiments.flight_state_machine import FlightStateMachine, FlightStateMachineConfig
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.safety_shield import SafetyShieldConfig
 
@@ -22,6 +23,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ood-threshold", type=float, default=0.10)
     p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--use-flight-plan", action="store_true")
+    p.add_argument("--initial-mode", type=str, default="shadow", choices=["shadow", "autonomous", "fallback"])
+    p.add_argument("--shadow-warmup-steps", type=int, default=4)
+    p.add_argument("--fallback-hold-steps", type=int, default=2)
+    p.add_argument("--recovery-hold-steps", type=int, default=3)
+    p.add_argument("--max-tracking-error", type=float, default=5.0)
     return p.parse_args()
 
 
@@ -52,6 +58,7 @@ def main() -> None:
     with h5py.File(args.dataset, "r") as h5:
         features = np.asarray(h5["features"], dtype=np.float32)
         actions = _load_actions(h5, args.use_motor_commands, args.use_flight_plan)
+        flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
         pose = np.asarray(h5["pose"], dtype=np.float32)
         pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
         timestamps = np.asarray(h5["timestamps_us"], dtype=np.int64)
@@ -70,18 +77,36 @@ def main() -> None:
         arbitration_cfg=ArbitrationConfig(ood_fallback_threshold=args.ood_threshold),
     )
     fallback = ConservativeFallbackController(FallbackControllerConfig())
+    flight_sm = FlightStateMachine(
+        bridge=bridge,
+        fallback=fallback,
+        cfg=FlightStateMachineConfig(
+            initial_mode=args.initial_mode,
+            shadow_warmup_steps=args.shadow_warmup_steps,
+            fallback_hold_steps=args.fallback_hold_steps,
+            recovery_hold_steps=args.recovery_hold_steps,
+            max_tracking_error=args.max_tracking_error,
+        ),
+    )
 
     n_eps = min(args.episodes, features.shape[0])
     source_counts: Counter[str] = Counter()
+    mode_counts: Counter[str] = Counter()
     fallback_rate = []
     shield_emergency_rate = []
     pwm_means = []
+    autonomous_rate = []
+    emergency_stop_rate = []
+    mode_change_rate = []
 
     for ep in range(n_eps):
-        bridge.reset()
+        flight_sm.reset()
         ep_fallback = 0.0
         ep_emergency = 0.0
         ep_pwm = []
+        ep_autonomous = 0.0
+        ep_emergency_mode = 0.0
+        ep_mode_changes = 0.0
 
         feat_t = torch.from_numpy(features[ep : ep + 1])
         act_t = torch.from_numpy(actions[ep : ep + 1])
@@ -94,33 +119,45 @@ def main() -> None:
 
         for t in range(features.shape[1]):
             planner = planner_cmds[t, :4]
-            fallback_cmd = fallback.command(pose[ep, t], pose_delta[ep, t], mode="hover")
             state_norm = float(np.linalg.norm(pose[ep, t, :3]) + np.linalg.norm(pose[ep, t, 3:]))
-            packet, decision = bridge.step(
+            packet, decision, snapshot = flight_sm.step(
                 timestamp_us=int(timestamps[ep, t]),
                 planner_command=planner,
-                fallback_command=fallback_cmd,
+                pose=pose[ep, t],
+                pose_delta=pose_delta[ep, t],
+                flight_plan=flight_plan[ep, t] if flight_plan is not None else None,
                 state_norm=state_norm,
                 ood_score=float(ood_scores[ep, t]),
             )
             source_counts[decision.source] += 1
+            mode_counts[snapshot.mode] += 1
             ep_fallback += decision.used_fallback
             ep_emergency += decision.shield_emergency
             ep_pwm.append(float(np.mean(packet.motor_pwm)))
+            ep_autonomous += float(snapshot.mode == "autonomous")
+            ep_emergency_mode += float(snapshot.mode == "emergency_stop")
+            ep_mode_changes += snapshot.mode_changed
 
         fallback_rate.append(ep_fallback / max(1, features.shape[1]))
         shield_emergency_rate.append(ep_emergency / max(1, features.shape[1]))
         pwm_means.append(float(np.mean(ep_pwm)) if ep_pwm else 0.0)
+        autonomous_rate.append(ep_autonomous / max(1, features.shape[1]))
+        emergency_stop_rate.append(ep_emergency_mode / max(1, features.shape[1]))
+        mode_change_rate.append(ep_mode_changes / max(1, features.shape[1]))
 
     result = {
         "episodes": float(n_eps),
         "planner_rate": float(source_counts.get("planner", 0) / max(1, sum(source_counts.values()))),
         "fallback_rate": float(np.mean(fallback_rate)) if fallback_rate else 0.0,
         "shield_emergency_rate": float(np.mean(shield_emergency_rate)) if shield_emergency_rate else 0.0,
+        "autonomous_rate": float(np.mean(autonomous_rate)) if autonomous_rate else 0.0,
+        "emergency_stop_rate": float(np.mean(emergency_stop_rate)) if emergency_stop_rate else 0.0,
+        "mode_change_rate": float(np.mean(mode_change_rate)) if mode_change_rate else 0.0,
         "avg_pwm_mean": float(np.mean(pwm_means)) if pwm_means else 0.0,
     }
     print("shadow_mode_eval", result)
     print("shadow_mode_sources", dict(source_counts))
+    print("shadow_mode_modes", dict(mode_counts))
 
 
 if __name__ == "__main__":

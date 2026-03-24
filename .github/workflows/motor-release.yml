@@ -169,6 +169,8 @@ jobs:
             --max-replay-reward-mse 0.02 \
             --max-shadow-fallback-rate 0.50 \
             --max-shadow-emergency-rate 0.01 \
+            --min-shadow-autonomous-rate 0.50 \
+            --max-shadow-emergency-stop-rate 0.01 \
             --max-shield-emergency-rate 0.01 \
             --max-sync-jitter-us 5000 \
             --max-ood-rate 0.10 \
@@ -182,6 +184,7 @@ jobs:
             --robust-log /tmp/release_robust.log \
             --runtime-log /tmp/release_runtime.log \
             --replay-log /tmp/release_replay.log \
+            --shadow-log /tmp/release_shadow.log \
             --sync-log /tmp/release_sync.log \
             --ood-log /tmp/release_ood.log \
             --system-id-log /tmp/release_system_id.log \

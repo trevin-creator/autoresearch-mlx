@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-replay-reward-mse", type=float, default=0.02)
     p.add_argument("--max-shadow-fallback-rate", type=float, default=0.5)
     p.add_argument("--max-shadow-emergency-rate", type=float, default=0.01)
+    p.add_argument("--min-shadow-autonomous-rate", type=float, default=0.5)
+    p.add_argument("--max-shadow-emergency-stop-rate", type=float, default=0.01)
     p.add_argument("--max-shield-emergency-rate", type=float, default=0.01)
     p.add_argument("--max-sync-jitter-us", type=float, default=5000.0)
     p.add_argument("--max-ood-rate", type=float, default=0.10)
@@ -140,6 +142,16 @@ def main() -> None:
     _fail_if(
         shadow.get("shield_emergency_rate", 1e9) > args.max_shadow_emergency_rate,
         "shadow shield emergency rate too high",
+        failures,
+    )
+    _fail_if(
+        shadow.get("autonomous_rate", -1.0) < args.min_shadow_autonomous_rate,
+        "shadow autonomous rate too low",
+        failures,
+    )
+    _fail_if(
+        shadow.get("emergency_stop_rate", 1e9) > args.max_shadow_emergency_stop_rate,
+        "shadow emergency-stop rate too high",
         failures,
     )
     _fail_if(sync.get("pass", 0.0) < 1.0, "sensor sync failed", failures)
