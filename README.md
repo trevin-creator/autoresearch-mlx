@@ -47,6 +47,17 @@ Dagster UI will be available at `http://127.0.0.1:3000`.
 
 This repo is no longer the active development target.
 
+## SNN + LeWorldModel Experiments (this archive)
+
+For a self-contained experimental scaffold that combines:
+
+- Spyx SNN feature extraction from stereo events + IMU,
+- LeWorldModel-style JEPA embedding training,
+- Dreamer-like latent planning, and
+- ONNX export for edge targets (for example NCNN on Raspberry Pi 5),
+
+see `world_model_experiments/README.md`.
+
 ## FPGA SNN Implementation Status
 
 Active implementation now lives in the spyx submodule.

@@ -7,6 +7,22 @@ repos:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
         files: ^(datagen/.*\.py|generate_stereo_events\.py)$
+      - id: ruff-format
+        name: ruff-format (spyx notebooks)
+        files: ^spyx/.*\.ipynb$
+      - id: ruff
+        name: ruff (spyx notebooks)
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^spyx/.*\.ipynb$
+
+  - repo: local
+    hooks:
+      - id: ty-check-notebooks
+        name: ty check (spyx notebooks)
+        entry: bash scripts/precommit_ty_notebooks.sh
+        language: system
+        files: ^spyx/.*\.ipynb$
+        types_or: [jupyter]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
