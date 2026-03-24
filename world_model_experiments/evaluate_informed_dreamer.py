@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset", type=str, required=True)
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--use-flight-plan", action="store_true")
+    p.add_argument("--use-motor-commands", action="store_true")
     return p.parse_args()
 
 
@@ -23,7 +24,12 @@ def main() -> None:
 
     with h5py.File(args.dataset, "r") as h5:
         features = np.asarray(h5["features"], dtype=np.float32)
-        actions = np.asarray(h5["actions"], dtype=np.float32)
+        if args.use_motor_commands:
+            if "motor_commands" not in h5:
+                raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+            actions = np.asarray(h5["motor_commands"], dtype=np.float32)
+        else:
+            actions = np.asarray(h5["actions"], dtype=np.float32)
         if args.use_flight_plan and "flight_plan" in h5:
             actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
         pose = np.asarray(h5["pose"], dtype=np.float32)

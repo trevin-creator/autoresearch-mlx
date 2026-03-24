@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import torch
 
 from world_model_experiments.lewm_feature_model import FeatureJEPA
+from world_model_experiments.motor_constraints import apply_motor_constraints
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class CEMConfig:
     iters: int = 5
     action_low: float = -1.0
     action_high: float = 1.0
+    max_action_delta: float | None = None
 
 
 @torch.no_grad()
@@ -39,7 +41,12 @@ def plan_actions_cem(
     for _ in range(cfg.iters):
         noise = torch.randn((cfg.candidates, cfg.horizon, action_dim), device=device)
         actions = mean + std * noise
-        actions = actions.clamp(cfg.action_low, cfg.action_high)
+        actions = apply_motor_constraints(
+            actions,
+            low=cfg.action_low,
+            high=cfg.action_high,
+            max_delta=cfg.max_action_delta,
+        )
 
         hist = emb_history.expand(cfg.candidates, -1, -1)
         rollout = model.rollout_embeddings(hist, actions)
@@ -52,4 +59,9 @@ def plan_actions_cem(
         mean = elite.mean(dim=0, keepdim=True)
         std = elite.std(dim=0, keepdim=True).clamp_min(1e-3)
 
-    return mean
+    return apply_motor_constraints(
+        mean,
+        low=cfg.action_low,
+        high=cfg.action_high,
+        max_delta=cfg.max_action_delta,
+    )

@@ -25,7 +25,11 @@ This folder provides a practical scaffold for your requested stack:
 - `run_informed_ablation.py`: one-command A/B run (with vs without flight-plan conditioning) and delta report.
 - `run_informed_multiseed_report.py`: multi-seed A/B run that writes CSV + Markdown report artifacts.
 - `motor_simulator.py`: lightweight 4-motor quad dynamics model with domain randomization helper.
+- `motor_constraints.py`: shared action clamping and slew-rate constraints for motor commands.
 - `build_sim_rollout_dataset.py`: simulator rollout dataset builder that writes `motor_commands` plus compatible keys.
+- `evaluate_closed_loop_motor.py`: closed-loop simulator evaluation with crash/smoothness metrics.
+- `run_motor_multiseed_report.py`: motor-mode multiseed train+eval pipeline producing CSV/Markdown artifacts.
+- `validate_motor_onnx_parity.py`: PyTorch vs ONNXRuntime parity check for motor-mode JEPA predictor.
 - `lewm_feature_model.py`: Feature JEPA model (PyTorch).
 - `train_feature_lewm.py`: Trainer for feature JEPA.
 - `dreamer_like_planner.py`: CEM planner over imagined embedding rollouts.
@@ -215,6 +219,31 @@ python -m world_model_experiments.train_informed_dreamer \
   --epochs 5 \
   --batch-size 16 \
   --use-motor-commands
+
+python -m world_model_experiments.evaluate_informed_dreamer \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --use-motor-commands
+
+python -m world_model_experiments.evaluate_closed_loop_motor \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --checkpoint artifacts/sim/informed_dreamer_motor/informed_dreamer_best.pt \
+  --episodes 8 \
+  --horizon 16 \
+  --use-motor-commands
+
+python -m world_model_experiments.validate_motor_onnx_parity \
+  --checkpoint artifacts/sim/feature_lewm_motor/feature_lewm_best.pt \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --output artifacts/sim/feature_lewm_motor/feature_lewm_motor.onnx \
+  --use-motor-commands
+
+python -m world_model_experiments.run_motor_multiseed_report \
+  --dataset artifacts/sim/sim_motor_rollouts.h5 \
+  --output-root artifacts/sim/motor_multiseed \
+  --seeds 0,1,2 \
+  --epochs 3 \
+  --batch-size 16
 ```
 
 ## Integrating real Tonic stereo+IMU data
