@@ -24,6 +24,19 @@ Archived monolith repo. Active development has moved to focused sibling repos:
 
 Open `/Users/vincent/Work/neuromorph.code-workspace` to work across the split repos.
 
+## Run Dagster UI Locally
+
+Dagster orchestration lives in the `neuromorph-pipeline` sibling repo. From this
+archive repo root, start the local Dagster UI with:
+
+```bash
+./.bench-venv/bin/python -m pip install dagster-webserver
+cd ../neuromorph-pipeline
+PYTHONPATH=src ../autoresearch-mlx/.bench-venv/bin/python -m dagster dev -m neuromorph_pipeline
+```
+
+Dagster UI will be available at `http://127.0.0.1:3000`.
+
 ## Repo mapping
 
 - Training/search code moved to `neuromorph-train`

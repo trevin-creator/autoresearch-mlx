@@ -1,0 +1,37 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run GitHub Actions Locally",
+      "type": "shell",
+      "command": "act",
+      "args": [
+        "push",
+        "-P",
+        "ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Run Dagster UI Locally",
+      "type": "shell",
+      "command": "${workspaceFolder}/.bench-venv/bin/python",
+      "args": ["-m", "dagster", "dev", "-m", "neuromorph_pipeline"],
+      "options": {
+        "cwd": "${workspaceFolder}/../neuromorph-pipeline",
+        "env": {
+          "PYTHONPATH": "src"
+        }
+      },
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
