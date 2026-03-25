@@ -17,6 +17,9 @@ from world_model_experiments.safety_shield import SafetyShieldConfig
 from world_model_experiments.telemetry import TelemetryLogger
 
 
+STD_FLOOR = 1e-6
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Actuator fault-injection replay for planner/fallback arbitration")
     p.add_argument("--dataset", type=str, required=True)
@@ -36,7 +39,7 @@ def parse_args() -> argparse.Namespace:
 def _compute_ood_scores(features: np.ndarray) -> np.ndarray:
     flat = features.reshape(-1, features.shape[-1]).astype(np.float64)
     mu = np.mean(flat, axis=0, keepdims=True)
-    sigma = np.std(flat, axis=0, keepdims=True) + 1e-6
+    sigma = np.maximum(np.std(flat, axis=0, keepdims=True), STD_FLOOR)
     z = np.abs((flat - mu) / sigma)
     frame = np.mean(z > 4.0, axis=1).astype(np.float32)
     return frame.reshape(features.shape[0], features.shape[1])

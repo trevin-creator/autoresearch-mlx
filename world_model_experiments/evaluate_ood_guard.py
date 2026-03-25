@@ -6,6 +6,9 @@ import h5py
 import numpy as np
 
 
+STD_FLOOR = 1e-6
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate feature-distribution OOD guard and fallback trigger rate")
     p.add_argument("--dataset", type=str, required=True)
@@ -27,7 +30,7 @@ def main() -> None:
 
     flat = feat.reshape(-1, feat.shape[-1])
     mu = np.mean(flat, axis=0, keepdims=True)
-    sigma = np.std(flat, axis=0, keepdims=True) + 1e-6
+    sigma = np.maximum(np.std(flat, axis=0, keepdims=True), STD_FLOOR)
     z = np.abs((flat - mu) / sigma)
 
     frame_ood = np.max(z, axis=1) > args.z_threshold
