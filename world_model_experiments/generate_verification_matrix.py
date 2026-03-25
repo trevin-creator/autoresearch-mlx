@@ -5,6 +5,15 @@ import ast
 import json
 from pathlib import Path
 
+# Verification matrix thresholds (R1–R10)
+THRESH_CRASH_RATE = 0.01
+THRESH_LATENCY_P95_MS = 6.0
+THRESH_POSE_DELTA_MSE = 0.01
+THRESH_CORR_VELOCITY = 0.05
+THRESH_SHIELD_EMERGENCY_RATE = 0.01
+THRESH_AUTONOMOUS_RATE = 0.5
+THRESH_FAULT_FALLBACK_RATE = 0.6
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Generate requirements-traceable verification matrix markdown")
@@ -80,20 +89,20 @@ def main() -> None:
     robust_crash_max = max((v.get("crash_rate", 0.0) for v in robust.values()), default=0.0)
 
     rows = [
-        ("R1 Closed-loop safety", _status(closed.get("crash_rate", 1.0) <= 0.01), f"crash_rate={closed.get('crash_rate', -1):.6f}"),
+        ("R1 Closed-loop safety", _status(closed.get("crash_rate", 1.0) <= THRESH_CRASH_RATE), f"crash_rate={closed.get('crash_rate', -1):.6f}"),
         (
             "R2 Robustness safety",
-            _status(robust_crash_max <= 0.01),
+            _status(robust_crash_max <= THRESH_CRASH_RATE),
             f"max_robust_crash_rate={robust_crash_max:.6f}",
         ),
         (
             "R3 Runtime budget",
-            _status(runtime.get("latency_ms_p95", 1e9) <= 6.0),
+            _status(runtime.get("latency_ms_p95", 1e9) <= THRESH_LATENCY_P95_MS),
             f"latency_ms_p95={runtime.get('latency_ms_p95', -1):.6f}",
         ),
         (
             "R4 Replay parity",
-            _status(replay.get("global_pose_delta_mse", 1e9) <= 0.01),
+            _status(replay.get("global_pose_delta_mse", 1e9) <= THRESH_POSE_DELTA_MSE),
             f"pose_delta_mse={replay.get('global_pose_delta_mse', -1):.6f}",
         ),
         (
@@ -108,12 +117,12 @@ def main() -> None:
         ),
         (
             "R7 System identification",
-            _status(sid.get("corr_velocity", 0.0) >= 0.05),
+            _status(sid.get("corr_velocity", 0.0) >= THRESH_CORR_VELOCITY),
             f"corr_velocity={sid.get('corr_velocity', -1):.6f}",
         ),
         (
             "R8 Shadow arbitration",
-            _status(shadow.get("shield_emergency_rate", 1.0) <= 0.01),
+            _status(shadow.get("shield_emergency_rate", 1.0) <= THRESH_SHIELD_EMERGENCY_RATE),
             (
                 f"fallback_rate={shadow.get('fallback_rate', -1):.6f}, "
                 f"shield_emergency_rate={shadow.get('shield_emergency_rate', -1):.6f}"
@@ -122,8 +131,8 @@ def main() -> None:
         (
             "R9 Flight-mode progression",
             _status(
-                shadow.get("autonomous_rate", 0.0) >= 0.5
-                and shadow.get("emergency_stop_rate", 1.0) <= 0.01
+                shadow.get("autonomous_rate", 0.0) >= THRESH_AUTONOMOUS_RATE
+                and shadow.get("emergency_stop_rate", 1.0) <= THRESH_SHIELD_EMERGENCY_RATE
             ),
             (
                 f"autonomous_rate={shadow.get('autonomous_rate', -1):.6f}, "
@@ -132,7 +141,7 @@ def main() -> None:
         ),
         (
             "R10 Fault-arbitration resilience",
-            _status(fault.get("fallback_rate", 0.0) >= 0.6 and fault.get("emergency_stop_rate", 1.0) <= 0.01),
+            _status(fault.get("fallback_rate", 0.0) >= THRESH_FAULT_FALLBACK_RATE and fault.get("emergency_stop_rate", 1.0) <= THRESH_SHIELD_EMERGENCY_RATE),
             f"fault_fallback_rate={fault.get('fallback_rate', -1):.6f}, fault_emergency_stop_rate={fault.get('emergency_stop_rate', -1):.6f}",
         ),
         (
