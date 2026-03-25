@@ -64,6 +64,19 @@ class _TumvieEventStream:
         self.ms_to_idx = self.file["ms_to_idx"]
         self.length = int(self.t.shape[0])
 
+    def close(self) -> None:
+        if self.file:
+            self.file.close()
+
+    def __enter__(self) -> _TumvieEventStream:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
+
     def _candidate_bounds(self, start_us: int, end_us: int) -> tuple[int, int]:
         start_ms = max(0, min(int(start_us // 1000), len(self.ms_to_idx) - 1))
         end_ms = max(0, min(int(end_us // 1000) + 1, len(self.ms_to_idx) - 1))
@@ -156,8 +169,6 @@ def _interp_series(sample_times_us: np.ndarray, times_us: np.ndarray, values: np
 
 def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[TumvieWindowSample]:
     recording_dir = Path(cfg.recording_dir)
-    left_stream = _TumvieEventStream(recording_dir / f"{recording_dir.name}-events_left.h5")
-    right_stream = _TumvieEventStream(recording_dir / f"{recording_dir.name}-events_right.h5")
     imu_times, imu_values = _load_imu_series(recording_dir)
     mocap_times, poses = _load_mocap_series(recording_dir)
 
@@ -167,49 +178,53 @@ def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[TumvieWindowSample]
     last_end_us = -1
     prev_pose: np.ndarray | None = None
 
-    min_time = max(int(imu_times[0]), int(left_stream.t[0]), int(right_stream.t[0]))
-    for idx, end_us in enumerate(mocap_times):
-        if end_us < min_time + cfg.window_us:
-            continue
-        if last_end_us >= 0 and end_us - last_end_us < cfg.stride_us:
-            continue
+    with (
+        _TumvieEventStream(recording_dir / f"{recording_dir.name}-events_left.h5") as left_stream,
+        _TumvieEventStream(recording_dir / f"{recording_dir.name}-events_right.h5") as right_stream,
+    ):
+        min_time = max(int(imu_times[0]), int(left_stream.t[0]), int(right_stream.t[0]))
+        for idx, end_us in enumerate(mocap_times):
+            if end_us < min_time + cfg.window_us:
+                continue
+            if last_end_us >= 0 and end_us - last_end_us < cfg.stride_us:
+                continue
 
-        start_us = int(end_us - cfg.window_us)
-        sample_times = (start_us + sample_offsets).astype(np.int64)
+            start_us = int(end_us - cfg.window_us)
+            sample_times = (start_us + sample_offsets).astype(np.int64)
 
-        left_t, left_x, left_y, left_p = left_stream.slice_events(start_us, int(end_us))
-        right_t, right_x, right_y, right_p = right_stream.slice_events(start_us, int(end_us))
-        if left_t.size == 0 and right_t.size == 0:
-            continue
+            left_t, left_x, left_y, left_p = left_stream.slice_events(start_us, int(end_us))
+            right_t, right_x, right_y, right_p = right_stream.slice_events(start_us, int(end_us))
+            if left_t.size == 0 and right_t.size == 0:
+                continue
 
-        left_frames = _rasterize_events(
-            left_t, left_x, left_y, left_p, start_us, int(end_us), cfg.sample_t, output_hw,
-        )
-        right_frames = _rasterize_events(
-            right_t, right_x, right_y, right_p, start_us, int(end_us), cfg.sample_t, output_hw,
-        )
-        imu_seq = _interp_series(sample_times, imu_times, imu_values)
-        action = np.mean(imu_seq, axis=0, keepdims=True).astype(np.float32)
-        pose = poses[idx].astype(np.float32)
-        pose_delta = np.zeros_like(pose) if prev_pose is None else (pose - prev_pose).astype(np.float32)
+            left_frames = _rasterize_events(
+                left_t, left_x, left_y, left_p, start_us, int(end_us), cfg.sample_t, output_hw,
+            )
+            right_frames = _rasterize_events(
+                right_t, right_x, right_y, right_p, start_us, int(end_us), cfg.sample_t, output_hw,
+            )
+            imu_seq = _interp_series(sample_times, imu_times, imu_values)
+            action = np.mean(imu_seq, axis=0, keepdims=True).astype(np.float32)
+            pose = poses[idx].astype(np.float32)
+            pose_delta = np.zeros_like(pose) if prev_pose is None else (pose - prev_pose).astype(np.float32)
 
-        yield TumvieWindowSample(
-            batch=StereoImuBatch(
-                left_events=left_frames[:, None, ...],
-                right_events=right_frames[:, None, ...],
-                imu=imu_seq[:, None, :],
-                actions=action,
-            ),
-            end_us=int(end_us),
-            pose=pose,
-            pose_delta=pose_delta,
-        )
+            yield TumvieWindowSample(
+                batch=StereoImuBatch(
+                    left_events=left_frames[:, None, ...],
+                    right_events=right_frames[:, None, ...],
+                    imu=imu_seq[:, None, :],
+                    actions=action,
+                ),
+                end_us=int(end_us),
+                pose=pose,
+                pose_delta=pose_delta,
+            )
 
-        used += 1
-        last_end_us = int(end_us)
-        prev_pose = pose
-        if used >= cfg.max_windows:
-            break
+            used += 1
+            last_end_us = int(end_us)
+            prev_pose = pose
+            if used >= cfg.max_windows:
+                break
 
 
 def build_tumvie_feature_dataset(
