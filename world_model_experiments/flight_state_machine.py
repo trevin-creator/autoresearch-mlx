@@ -164,9 +164,7 @@ class FlightStateMachine:
 
         effective_ood = float(ood_score)
         planner = np.asarray(planner_command, dtype=np.float32)
-        if self.mode == FlightMode.SHADOW:
-            effective_ood = self.bridge.arbitration_cfg.ood_fallback_threshold + 1.0
-        elif self.mode == FlightMode.FALLBACK:
+        if self.mode in {FlightMode.SHADOW, FlightMode.FALLBACK}:
             effective_ood = self.bridge.arbitration_cfg.ood_fallback_threshold + 1.0
         elif self.mode == FlightMode.EMERGENCY_STOP:
             planner = np.zeros(4, dtype=np.float32)
