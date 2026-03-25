@@ -11,7 +11,7 @@ from world_model_experiments.autopilot_bridge import ArbitrationConfig, MotorAut
 from world_model_experiments.command_interface import CommandInterfaceConfig
 from world_model_experiments.fallback_controller import ConservativeFallbackController, FallbackControllerConfig
 from world_model_experiments.flight_state_machine import FlightStateMachine, FlightStateMachineConfig
-from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_actions
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.safety_shield import SafetyShieldConfig
 from world_model_experiments.telemetry import TelemetryLogger
@@ -34,18 +34,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _load_actions(h5: h5py.File, use_motor_commands: bool, use_flight_plan: bool) -> np.ndarray:
-    if use_motor_commands:
-        if "motor_commands" not in h5:
-            raise ValueError(ERR_NO_MOTOR_COMMANDS)
-        actions = np.asarray(h5["motor_commands"], dtype=np.float32)
-    else:
-        actions = np.asarray(h5["actions"], dtype=np.float32)
-    if use_flight_plan and "flight_plan" in h5:
-        actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
-    return actions
-
-
 def _compute_ood_scores(features: np.ndarray) -> np.ndarray:
     flat = features.reshape(-1, features.shape[-1]).astype(np.float64)
     mu = np.mean(flat, axis=0, keepdims=True)
@@ -60,7 +48,7 @@ def main() -> None:
 
     with h5py.File(args.dataset, "r") as h5:
         features = np.asarray(h5["features"], dtype=np.float32)
-        actions = _load_actions(h5, args.use_motor_commands, args.use_flight_plan)
+        actions = load_actions(h5, args.use_motor_commands, args.use_flight_plan)
         flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
         pose = np.asarray(h5["pose"], dtype=np.float32)
         pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)

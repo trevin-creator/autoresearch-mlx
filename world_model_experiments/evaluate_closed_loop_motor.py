@@ -6,7 +6,7 @@ import h5py
 import numpy as np
 import torch
 
-from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_actions
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
@@ -33,25 +33,13 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _load_actions(h5: h5py.File, use_motor_commands: bool, use_flight_plan: bool) -> np.ndarray:
-    if use_motor_commands:
-        if "motor_commands" not in h5:
-            raise ValueError(ERR_NO_MOTOR_COMMANDS)
-        actions = np.asarray(h5["motor_commands"], dtype=np.float32)
-    else:
-        actions = np.asarray(h5["actions"], dtype=np.float32)
-    if use_flight_plan and "flight_plan" in h5:
-        actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
-    return actions
-
-
 def main() -> None:
     args = parse_args()
     rng = np.random.default_rng(args.seed)
 
     with h5py.File(args.dataset, "r") as h5:
         features = np.asarray(h5["features"], dtype=np.float32)
-        actions = _load_actions(h5, args.use_motor_commands, args.use_flight_plan)
+        actions = load_actions(h5, args.use_motor_commands, args.use_flight_plan)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])
