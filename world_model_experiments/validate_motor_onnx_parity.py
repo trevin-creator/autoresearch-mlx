@@ -47,7 +47,8 @@ def main() -> None:
     feat_t = torch.from_numpy(features)
     act_t = torch.from_numpy(actions)
     with torch.no_grad():
-        pt_out = model.predict(model.encode(feat_t, act_t)["emb"], model.encode(feat_t, act_t)["act_emb"]).cpu().numpy()
+        enc = model.encode(feat_t, act_t)
+        pt_out = model.predict(enc["emb"], enc["act_emb"]).cpu().numpy()
 
     wrapper = FeatureJepaOnnxWrapper(model).eval()
     out_path = Path(args.output)

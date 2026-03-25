@@ -51,7 +51,10 @@ def main() -> None:
     pd_mse = float(np.mean((out["pose_delta"].cpu().numpy() - pose_delta) ** 2))
     rw_mse = float(np.mean((out["reward"].cpu().numpy() - reward) ** 2))
     cont_prob = 1.0 / (1.0 + np.exp(-out["continue_logit"].cpu().numpy()))
-    cont_bce = float(np.mean(-(cont * np.log(np.clip(cont_prob, 1e-8, 1.0)) + (1.0 - cont) * np.log(np.clip(1.0 - cont_prob, 1e-8, 1.0)))))
+    cont_bce = float(np.mean(
+        -(cont * np.log(np.clip(cont_prob, 1e-8, 1.0))
+          + (1.0 - cont) * np.log(np.clip(1.0 - cont_prob, 1e-8, 1.0)))
+    ))
 
     print("informed_eval", {
         "pose_mse": pose_mse,

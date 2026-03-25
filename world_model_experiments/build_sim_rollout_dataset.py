@@ -112,7 +112,10 @@ def build_dataset(args: argparse.Namespace) -> Path:
             action_proxy = np.concatenate([pose_delta[:3], sim.state.body_rates], axis=0).astype(np.float32)
 
             # Simple placeholder flight plan for compatibility (3 future blocks of 8 dims).
-            fp = np.tile(np.concatenate([pose_delta[:3], [pose_delta[5]], pose[:3], [pose[5]]], axis=0), 3).astype(np.float32)
+            fp = np.tile(
+                np.concatenate([pose_delta[:3], [pose_delta[5]], pose[:3], [pose[5]]], axis=0),
+                3,
+            ).astype(np.float32)
 
             feat_list.append(feat)
             action_proxy_list.append(action_proxy)

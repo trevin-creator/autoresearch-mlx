@@ -182,8 +182,12 @@ def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[TumvieWindowSample]
         if left_t.size == 0 and right_t.size == 0:
             continue
 
-        left_frames = _rasterize_events(left_t, left_x, left_y, left_p, start_us, int(end_us), cfg.sample_t, output_hw)
-        right_frames = _rasterize_events(right_t, right_x, right_y, right_p, start_us, int(end_us), cfg.sample_t, output_hw)
+        left_frames = _rasterize_events(
+            left_t, left_x, left_y, left_p, start_us, int(end_us), cfg.sample_t, output_hw,
+        )
+        right_frames = _rasterize_events(
+            right_t, right_x, right_y, right_p, start_us, int(end_us), cfg.sample_t, output_hw,
+        )
         imu_seq = _interp_series(sample_times, imu_times, imu_values)
         action = np.mean(imu_seq, axis=0, keepdims=True).astype(np.float32)
         pose = poses[idx].astype(np.float32)

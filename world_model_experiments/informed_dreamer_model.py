@@ -67,14 +67,26 @@ class InformedFeatureDreamer(nn.Module):
         self.prior = nn.Linear(cfg.hidden_dim, cfg.embed_dim)
 
         # Informed decoder heads (SkyDreamer-style privileged targets)
-        self.pose_head = nn.Sequential(nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, cfg.pose_dim))
-        self.pose_delta_head = nn.Sequential(nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, cfg.pose_dim))
-        self.reward_head = nn.Sequential(nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1))
-        self.continue_head = nn.Sequential(nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1))
+        self.pose_head = nn.Sequential(
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, cfg.pose_dim),
+        )
+        self.pose_delta_head = nn.Sequential(
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, cfg.pose_dim),
+        )
+        self.reward_head = nn.Sequential(
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1),
+        )
+        self.continue_head = nn.Sequential(
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1),
+        )
 
         # Actor-critic on latent state
-        self.actor = nn.Sequential(nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 2 * cfg.action_dim))
-        self.critic = nn.Sequential(nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1))
+        self.actor = nn.Sequential(
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 2 * cfg.action_dim),
+        )
+        self.critic = nn.Sequential(
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1),
+        )
 
         self.reg = GaussianRegularizer()
 
