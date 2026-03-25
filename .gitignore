@@ -5,8 +5,14 @@
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.coverage
+coverage.xml
 __pycache__/
 *.pyc
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
 *.log
 run.log
 run_snn.log
