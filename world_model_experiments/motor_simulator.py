@@ -4,6 +4,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# Reward shaping weights
+REWARD_TRANSLATION_WEIGHT = 0.8
+REWARD_YAW_WEIGHT = 0.2
+
+# Numerical stability floor for motor time-constant
+MOTOR_TAU_EPS = 1e-4
+
 
 @dataclass(frozen=True)
 class QuadSimConfig:
@@ -76,7 +83,7 @@ class QuadMotorDynamics:
         cmd = np.clip(cmd, -1.0, 1.0)
 
         target_motors = 0.5 * (cmd + 1.0) * self.cfg.command_scale
-        alpha = float(np.clip(dt / max(self.cfg.motor_tau, 1e-4), 0.0, 1.0))
+        alpha = float(np.clip(dt / max(self.cfg.motor_tau, MOTOR_TAU_EPS), 0.0, 1.0))
         self.state.motors = (1.0 - alpha) * self.state.motors + alpha * target_motors
         self.state.motors = np.clip(self.state.motors, 0.0, 1.0)
 
@@ -108,7 +115,10 @@ class QuadMotorDynamics:
         pose = np.concatenate([self.state.position, self.state.euler], axis=0).astype(np.float32)
         pose_delta = np.concatenate([dt * self.state.velocity, dt * self.state.body_rates], axis=0).astype(np.float32)
 
-        reward = np.float32(0.8 * np.linalg.norm(pose_delta[:3]) + 0.2 * abs(pose_delta[5]))
+        reward = np.float32(
+            REWARD_TRANSLATION_WEIGHT * np.linalg.norm(pose_delta[:3])
+            + REWARD_YAW_WEIGHT * abs(pose_delta[5])
+        )
         cont = np.float32(1.0)
 
         return {

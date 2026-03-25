@@ -8,6 +8,7 @@ import torch
 
 from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
+from world_model_experiments.motor_simulator import REWARD_TRANSLATION_WEIGHT, REWARD_YAW_WEIGHT
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,7 +48,7 @@ def main() -> None:
     if reward is None:
         transl = np.linalg.norm(pose_delta[..., :3], axis=-1)
         yaw = np.abs(pose_delta[..., 5])
-        reward = (0.8 * transl + 0.2 * yaw).astype(np.float32)
+        reward = (REWARD_TRANSLATION_WEIGHT * transl + REWARD_YAW_WEIGHT * yaw).astype(np.float32)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])

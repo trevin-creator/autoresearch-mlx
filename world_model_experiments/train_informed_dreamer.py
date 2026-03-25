@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 from world_model_experiments._errors import ERR_MOTOR_FP_EXCLUSIVE, ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
+from world_model_experiments.motor_simulator import REWARD_TRANSLATION_WEIGHT, REWARD_YAW_WEIGHT
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class InformedDataset(Dataset):
         if self.reward is None:
             transl = np.linalg.norm(self.pose_delta[..., :3], axis=-1)
             yaw = np.abs(self.pose_delta[..., 5])
-            self.reward = (0.8 * transl + 0.2 * yaw).astype(np.float32)
+            self.reward = (REWARD_TRANSLATION_WEIGHT * transl + REWARD_YAW_WEIGHT * yaw).astype(np.float32)
 
         if self.cont is None:
             self.cont = np.ones(self.reward.shape, dtype=np.float32)
