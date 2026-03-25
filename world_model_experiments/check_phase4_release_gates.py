@@ -98,7 +98,11 @@ def _fail_if(cond: bool, msg: str, failures: list[str]) -> None:
 def _load_manifest(path: str) -> dict[str, Any]:
     try:
         raw = json.loads(Path(path).read_text())
-    except (OSError, JSONDecodeError):
+    except FileNotFoundError:
+        logger.warning("manifest file not found: %s", path)
+        return {}
+    except JSONDecodeError:
+        logger.warning("manifest file is not valid JSON: %s", path)
         return {}
     if isinstance(raw, dict):
         return cast(dict[str, Any], raw)
