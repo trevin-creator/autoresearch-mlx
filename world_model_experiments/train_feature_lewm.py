@@ -8,6 +8,12 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
+from world_model_experiments._errors import (
+    ERR_MOTOR_FP_EXCLUSIVE,
+    ERR_NO_FLIGHT_PLAN,
+    ERR_NO_MOTOR_COMMANDS,
+    ERR_SEQ_COUNT_MISMATCH,
+)
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureLeWmConfig
 
 
@@ -17,14 +23,14 @@ class FeatureSequenceDataset(Dataset):
             self.features = np.asarray(h5["features"], dtype=np.float32)
             if use_motor_commands:
                 if "motor_commands" not in h5:
-                    raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+                    raise ValueError(ERR_NO_MOTOR_COMMANDS)
                 self.actions = np.asarray(h5["motor_commands"], dtype=np.float32)
             else:
                 self.actions = np.asarray(h5["actions"], dtype=np.float32)
             self.flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
 
         if self.features.shape[0] != self.actions.shape[0]:
-            raise ValueError("features/actions sequence counts do not match")
+            raise ValueError(ERR_SEQ_COUNT_MISMATCH)
 
     def __len__(self) -> int:
         return self.features.shape[0]
@@ -66,7 +72,7 @@ def train() -> None:
     np.random.seed(args.seed)
 
     if args.use_motor_commands and args.use_flight_plan:
-        raise ValueError("--use-motor-commands and --use-flight-plan are mutually exclusive")
+        raise ValueError(ERR_MOTOR_FP_EXCLUSIVE)
 
     ds = FeatureSequenceDataset(args.dataset, use_motor_commands=args.use_motor_commands)
     n_val = max(1, int(0.1 * len(ds)))
@@ -81,7 +87,7 @@ def train() -> None:
     action_dim = int(sample["actions"].shape[-1])
     if args.use_flight_plan:
         if "flight_plan" not in sample:
-            raise ValueError("--use-flight-plan set but dataset has no flight_plan key")
+            raise ValueError(ERR_NO_FLIGHT_PLAN)
         action_dim += int(sample["flight_plan"].shape[-1])
 
     cfg = FeatureLeWmConfig(

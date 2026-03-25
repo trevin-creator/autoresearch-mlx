@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from world_model_experiments._errors import ERR_SEEDS_EMPTY
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run disturbance robustness report from per-seed checkpoints")
@@ -53,7 +55,7 @@ def main() -> None:
     args = parse_args()
     seeds = [int(s.strip()) for s in args.seeds.split(",") if s.strip()]
     if not seeds:
-        raise ValueError("At least one seed must be provided")
+        raise ValueError(ERR_SEEDS_EMPTY)
 
     out_root = Path(args.output_root)
     out_root.mkdir(parents=True, exist_ok=True)

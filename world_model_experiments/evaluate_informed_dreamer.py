@@ -7,6 +7,7 @@ import h5py
 import numpy as np
 import torch
 
+from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 
 
@@ -26,7 +27,7 @@ def main() -> None:
         features = np.asarray(h5["features"], dtype=np.float32)
         if args.use_motor_commands:
             if "motor_commands" not in h5:
-                raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+                raise ValueError(ERR_NO_MOTOR_COMMANDS)
             actions = np.asarray(h5["motor_commands"], dtype=np.float32)
         else:
             actions = np.asarray(h5["actions"], dtype=np.float32)

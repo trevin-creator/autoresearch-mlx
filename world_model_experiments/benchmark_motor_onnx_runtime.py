@@ -12,6 +12,7 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
+from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureJepaOnnxWrapper, FeatureLeWmConfig
 
 
@@ -36,7 +37,7 @@ def _load_data(path: str, use_motor_commands: bool, action_dim: int) -> tuple[np
         feat = np.asarray(h5["features"], dtype=np.float32)
         if use_motor_commands:
             if "motor_commands" not in h5:
-                raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+                raise ValueError(ERR_NO_MOTOR_COMMANDS)
             act = np.asarray(h5["motor_commands"], dtype=np.float32)
         else:
             act = np.asarray(h5["actions"], dtype=np.float32)

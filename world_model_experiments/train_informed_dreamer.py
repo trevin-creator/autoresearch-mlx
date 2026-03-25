@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
+from world_model_experiments._errors import ERR_MOTOR_FP_EXCLUSIVE, ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 
 
@@ -17,7 +18,7 @@ class InformedDataset(Dataset):
             self.features = np.asarray(h5["features"], dtype=np.float32)
             if use_motor_commands:
                 if "motor_commands" not in h5:
-                    raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+                    raise ValueError(ERR_NO_MOTOR_COMMANDS)
                 actions = np.asarray(h5["motor_commands"], dtype=np.float32)
             else:
                 actions = np.asarray(h5["actions"], dtype=np.float32)
@@ -78,7 +79,7 @@ def train() -> None:
     np.random.seed(args.seed)
 
     if args.use_motor_commands and args.use_flight_plan:
-        raise ValueError("--use-motor-commands and --use-flight-plan are mutually exclusive")
+        raise ValueError(ERR_MOTOR_FP_EXCLUSIVE)
 
     ds = InformedDataset(
         args.dataset,

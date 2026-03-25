@@ -8,6 +8,7 @@ import h5py
 import numpy as np
 import torch
 
+from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
@@ -39,7 +40,7 @@ def parse_args() -> argparse.Namespace:
 def _load_actions(h5: h5py.File, use_motor_commands: bool, use_flight_plan: bool) -> np.ndarray:
     if use_motor_commands:
         if "motor_commands" not in h5:
-            raise ValueError("--use-motor-commands set but dataset has no motor_commands key")
+            raise ValueError(ERR_NO_MOTOR_COMMANDS)
         actions = np.asarray(h5["motor_commands"], dtype=np.float32)
     else:
         actions = np.asarray(h5["actions"], dtype=np.float32)
