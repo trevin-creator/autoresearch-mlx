@@ -24,7 +24,7 @@ class FeatureLeWmConfig:
 class GaussianRegularizer(nn.Module):
     """Lightweight isotropic Gaussian regularizer inspired by SIGReg."""
 
-    def __init__(self, num_proj: int = 256):
+    def __init__(self, num_proj: int = 256) -> None:
         super().__init__()
         self.num_proj = num_proj
 
@@ -41,7 +41,7 @@ class GaussianRegularizer(nn.Module):
 
 
 class FeatureEncoder(nn.Module):
-    def __init__(self, feature_dim: int, embed_dim: int, hidden_dim: int):
+    def __init__(self, feature_dim: int, embed_dim: int, hidden_dim: int) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(feature_dim, hidden_dim),
@@ -55,7 +55,7 @@ class FeatureEncoder(nn.Module):
 
 
 class ActionEncoder(nn.Module):
-    def __init__(self, action_dim: int, embed_dim: int):
+    def __init__(self, action_dim: int, embed_dim: int) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(action_dim, embed_dim),
@@ -70,7 +70,7 @@ class ActionEncoder(nn.Module):
 class ARPredictor(nn.Module):
     """Autoregressive predictor conditioned on action embeddings."""
 
-    def __init__(self, embed_dim: int, hidden_dim: int, depth: int, heads: int, dropout: float):
+    def __init__(self, embed_dim: int, hidden_dim: int, depth: int, heads: int, dropout: float) -> None:
         super().__init__()
         self.pos_emb = nn.Parameter(torch.randn(1, 1024, embed_dim) * 0.02)
         layer = nn.TransformerEncoderLayer(
@@ -99,7 +99,7 @@ class ARPredictor(nn.Module):
 class FeatureJEPA(nn.Module):
     """LeWM-style JEPA for feature vectors instead of RGB pixels."""
 
-    def __init__(self, cfg: FeatureLeWmConfig):
+    def __init__(self, cfg: FeatureLeWmConfig) -> None:
         super().__init__()
         self.cfg = cfg
         self.encoder = FeatureEncoder(cfg.feature_dim, cfg.embed_dim, cfg.hidden_dim)
@@ -169,7 +169,7 @@ class FeatureJEPA(nn.Module):
 class FeatureJepaOnnxWrapper(nn.Module):
     """ONNX export wrapper: emits predicted next embeddings from context."""
 
-    def __init__(self, model: FeatureJEPA):
+    def __init__(self, model: FeatureJEPA) -> None:
         super().__init__()
         self.model = model
 

@@ -24,7 +24,7 @@ class MotorCommandPacket:
 class MotorCommandInterface:
     """Convert normalized motor commands to bounded PWM commands with rate limiting."""
 
-    def __init__(self, cfg: CommandInterfaceConfig):
+    def __init__(self, cfg: CommandInterfaceConfig) -> None:
         self.cfg = cfg
         self._last_pwm = np.full(4, cfg.neutral_pwm, dtype=np.float32)
 

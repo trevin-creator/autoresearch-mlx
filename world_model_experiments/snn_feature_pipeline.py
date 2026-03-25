@@ -57,7 +57,7 @@ class SnnFeatureConfig:
 class SpyxStereoImuFeatureExtractor:
     """Extract compact feature vectors with Spyx stereo + IMU modules."""
 
-    def __init__(self, cfg: SnnFeatureConfig):
+    def __init__(self, cfg: SnnFeatureConfig) -> None:
         self.cfg = cfg
         self._forward = hk.without_apply_rng(hk.transform(self._build_forward))
         left = jnp.zeros((4, 1, cfg.input_hw[0], cfg.input_hw[1], cfg.input_channels), dtype=jnp.float32)

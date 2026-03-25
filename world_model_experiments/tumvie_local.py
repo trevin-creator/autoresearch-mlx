@@ -54,7 +54,7 @@ def _quat_to_euler_xyz(quat: np.ndarray) -> np.ndarray:
 
 
 class _TumvieEventStream:
-    def __init__(self, file_path: str | Path):
+    def __init__(self, file_path: str | Path) -> None:
         self.file = h5py.File(file_path, "r")
         self.events = self.file["events"]
         self.t = self.events["t"]

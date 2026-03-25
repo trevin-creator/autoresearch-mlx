@@ -26,7 +26,7 @@ class InformedDreamerConfig:
 
 
 class GaussianRegularizer(nn.Module):
-    def __init__(self, num_proj: int = 256):
+    def __init__(self, num_proj: int = 256) -> None:
         super().__init__()
         self.num_proj = num_proj
 
@@ -47,7 +47,7 @@ class InformedFeatureDreamer(nn.Module):
     - Actor smoothness regularization is applied on action means only.
     """
 
-    def __init__(self, cfg: InformedDreamerConfig):
+    def __init__(self, cfg: InformedDreamerConfig) -> None:
         super().__init__()
         self.cfg = cfg
 

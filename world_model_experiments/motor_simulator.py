@@ -34,7 +34,7 @@ class QuadState:
 class QuadMotorDynamics:
     """Lightweight 6-DoF quadrotor model with 4 motor commands in [-1, 1]."""
 
-    def __init__(self, cfg: QuadSimConfig):
+    def __init__(self, cfg: QuadSimConfig) -> None:
         self.cfg = cfg
         self.state = self.reset()
 

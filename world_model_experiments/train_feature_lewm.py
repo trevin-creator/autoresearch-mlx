@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class FeatureSequenceDataset(Dataset):
-    def __init__(self, h5_path: str | Path, use_motor_commands: bool):
+    def __init__(self, h5_path: str | Path, use_motor_commands: bool) -> None:
         with h5py.File(h5_path, "r") as h5:
             self.features = np.asarray(h5["features"], dtype=np.float32)
             if use_motor_commands:

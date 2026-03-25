@@ -23,7 +23,7 @@ class ConservativeFallbackController:
     safer than the learned planner when arbitration disables planner authority.
     """
 
-    def __init__(self, cfg: FallbackControllerConfig):
+    def __init__(self, cfg: FallbackControllerConfig) -> None:
         self.cfg = cfg
 
     def command(

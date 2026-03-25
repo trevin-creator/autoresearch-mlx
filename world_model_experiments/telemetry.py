@@ -22,7 +22,7 @@ def _to_plain(value: Any) -> Any:
 class TelemetryLogger:
     path: Path
 
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = self.path.open("w", encoding="utf-8")
