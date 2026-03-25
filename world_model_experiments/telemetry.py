@@ -31,4 +31,15 @@ class TelemetryLogger:
         self._fh.write(json.dumps(_to_plain(event), sort_keys=True) + "\n")
 
     def close(self) -> None:
-        self._fh.close()
+        if not self._fh.closed:
+            self._fh.close()
+
+    def __del__(self) -> None:
+        self.close()
+
+    # Context-manager protocol to prevent resource leaks.
+    def __enter__(self) -> TelemetryLogger:
+        return self
+
+    def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> None:
+        self.close()
