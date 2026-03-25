@@ -26,6 +26,23 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _validate_args(args: argparse.Namespace) -> None:
+    if args.num_sequences <= 0:
+        raise ValueError("--num-sequences must be > 0")
+    if args.sequence_len <= 0:
+        raise ValueError("--sequence-len must be > 0")
+    if args.feature_dim <= 0:
+        raise ValueError("--feature-dim must be > 0")
+    if args.action_noise < 0.0:
+        raise ValueError("--action-noise must be >= 0")
+    if args.wind_std < 0.0:
+        raise ValueError("--wind-std must be >= 0")
+    if args.actuation_noise_std < 0.0:
+        raise ValueError("--actuation-noise-std must be >= 0")
+    if args.latency_steps < 0:
+        raise ValueError("--latency-steps must be >= 0")
+
+
 def _state_to_feature(pose: np.ndarray, pose_delta: np.ndarray, motors: np.ndarray, feature_dim: int, rng: np.random.Generator) -> np.ndarray:
     base = np.concatenate(
         [
@@ -158,6 +175,7 @@ def build_dataset(args: argparse.Namespace) -> Path:
 
 def main() -> None:
     args = parse_args()
+    _validate_args(args)
     out = build_dataset(args)
     logger.info("wrote simulator rollout dataset: %s", out)
 
