@@ -188,24 +188,23 @@ def write_feature_hdf5(examples: list[FeatureSequenceExample], output_path: str 
 
 
 def mock_tonic_stereo_imu_windows(
+    cfg: SnnFeatureConfig,
     num_windows: int,
     timesteps: int,
     batch: int,
-    hw: tuple[int, int],
-    channels: int,
-    imu_dim: int,
     action_dim: int,
     seed: int = 0,
 ) -> list[StereoImuBatch]:
     """Synthetic stream for smoke-testing the pipeline before real Tonic wiring."""
 
     rng = np.random.default_rng(seed)
-    h, w = hw
+    h, w = cfg.input_hw
+    channels = cfg.input_channels
     windows: list[StereoImuBatch] = []
     for _ in range(num_windows):
         left = rng.binomial(1, 0.04, size=(timesteps, batch, h, w, channels)).astype(np.float32)
         right = rng.binomial(1, 0.04, size=(timesteps, batch, h, w, channels)).astype(np.float32)
-        imu = rng.normal(0.0, 1.0, size=(timesteps, batch, imu_dim)).astype(np.float32)
+        imu = rng.normal(0.0, 1.0, size=(timesteps, batch, cfg.imu_dim)).astype(np.float32)
         act = rng.uniform(-1.0, 1.0, size=(batch, action_dim)).astype(np.float32)
         windows.append(StereoImuBatch(left_events=left, right_events=right, imu=imu, actions=act))
     return windows

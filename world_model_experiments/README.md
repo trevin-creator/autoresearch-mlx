@@ -89,12 +89,10 @@ from world_model_experiments.snn_feature_pipeline import (
 cfg = SnnFeatureConfig(input_hw=(32, 32), input_channels=2, imu_dim=6)
 extractor = SpyxStereoImuFeatureExtractor(cfg)
 windows = mock_tonic_stereo_imu_windows(
+    cfg=cfg,
     num_windows=512,
     timesteps=8,
     batch=1,
-    hw=(32, 32),
-    channels=2,
-    imu_dim=6,
     action_dim=4,
 )
 seqs = windows_to_sequences(extractor, windows, sequence_len=16, action_dim=4)
