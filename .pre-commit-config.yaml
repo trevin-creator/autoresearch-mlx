@@ -3,10 +3,10 @@ repos:
     rev: v0.15.7
     hooks:
       - id: ruff-format
-        files: ^(datagen/.*\.py|generate_stereo_events\.py)$
+        files: ^(datagen/.*\.py|generate_stereo_events\.py|world_model_experiments/.*\.py)$
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
-        files: ^(datagen/.*\.py|generate_stereo_events\.py)$
+        files: ^(datagen/.*\.py|generate_stereo_events\.py|world_model_experiments/.*\.py)$
       - id: ruff-format
         name: ruff-format (spyx notebooks)
         files: ^spyx/.*\.ipynb$
