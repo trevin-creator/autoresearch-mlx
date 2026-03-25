@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as functional
 from torch import nn
-import torch.nn.functional as F
 
 
 @dataclass(frozen=True)
@@ -68,24 +68,36 @@ class InformedFeatureDreamer(nn.Module):
 
         # Informed decoder heads (SkyDreamer-style privileged targets)
         self.pose_head = nn.Sequential(
-            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, cfg.pose_dim),
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.hidden_dim, cfg.pose_dim),
         )
         self.pose_delta_head = nn.Sequential(
-            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, cfg.pose_dim),
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.hidden_dim, cfg.pose_dim),
         )
         self.reward_head = nn.Sequential(
-            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1),
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.hidden_dim, 1),
         )
         self.continue_head = nn.Sequential(
-            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1),
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.hidden_dim, 1),
         )
 
         # Actor-critic on latent state
         self.actor = nn.Sequential(
-            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 2 * cfg.action_dim),
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.hidden_dim, 2 * cfg.action_dim),
         )
         self.critic = nn.Sequential(
-            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim), nn.GELU(), nn.Linear(cfg.hidden_dim, 1),
+            nn.Linear(cfg.hidden_dim + cfg.embed_dim, cfg.hidden_dim),
+            nn.GELU(),
+            nn.Linear(cfg.hidden_dim, 1),
         )
 
         self.reg = GaussianRegularizer()
@@ -126,11 +138,11 @@ class InformedFeatureDreamer(nn.Module):
     ) -> dict[str, torch.Tensor]:
         out = self.world_forward(features, actions)
 
-        latent_loss = F.mse_loss(out["z_prior"][:, :-1], out["z_post"][:, 1:])
-        pose_loss = F.mse_loss(out["pose"], pose_tgt)
-        pose_delta_loss = F.mse_loss(out["pose_delta"], pose_delta_tgt)
-        reward_loss = F.mse_loss(out["reward"], reward_tgt)
-        continue_loss = F.binary_cross_entropy_with_logits(out["continue_logit"], continue_tgt)
+        latent_loss = functional.mse_loss(out["z_prior"][:, :-1], out["z_post"][:, 1:])
+        pose_loss = functional.mse_loss(out["pose"], pose_tgt)
+        pose_delta_loss = functional.mse_loss(out["pose_delta"], pose_delta_tgt)
+        reward_loss = functional.mse_loss(out["reward"], reward_tgt)
+        continue_loss = functional.binary_cross_entropy_with_logits(out["continue_logit"], continue_tgt)
         sigreg = self.reg(out["z_post"])
 
         total = (
@@ -202,7 +214,7 @@ class InformedFeatureDreamer(nn.Module):
             targets = torch.stack(list(reversed(target_list)), dim=1)
 
         actor_loss = -targets.mean()
-        critic_loss = F.mse_loss(values_t, targets)
+        critic_loss = functional.mse_loss(values_t, targets)
 
         if len(mus) > 1:
             mu_t = torch.stack(mus, dim=1)

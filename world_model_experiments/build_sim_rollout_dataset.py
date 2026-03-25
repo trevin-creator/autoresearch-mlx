@@ -4,9 +4,15 @@ import argparse
 import logging
 from pathlib import Path
 
-import h5py
 import numpy as np
 
+from world_model_experiments._io import write_sequence_dataset
+from world_model_experiments.data_catalog import (
+    DEFAULT_CATALOG_ROOT,
+    default_dataset_output_path,
+    describe_arrays,
+    register_dataset,
+)
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
 
 logger = logging.getLogger(__name__)
@@ -14,7 +20,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Build simulator rollout dataset with 4-motor commands")
-    p.add_argument("--output", type=str, default="artifacts/sim/sim_motor_rollouts.h5")
+    p.add_argument("--output", type=str, default=str(default_dataset_output_path("sim_motor_rollouts")))
+    p.add_argument("--dataset-name", type=str, default="sim_motor_rollouts")
+    p.add_argument("--catalog-root", type=str, default=str(DEFAULT_CATALOG_ROOT))
+    p.add_argument("--split", type=str, default="train")
+    p.add_argument("--source-uri", type=str, default="simulator://quad_motor_dynamics")
+    p.add_argument("--parent-dataset-id", action="append", default=[])
     p.add_argument("--num-sequences", type=int, default=64)
     p.add_argument("--sequence-len", type=int, default=16)
     p.add_argument("--feature-dim", type=int, default=79)
@@ -28,22 +39,24 @@ def parse_args() -> argparse.Namespace:
 
 def _validate_args(args: argparse.Namespace) -> None:
     if args.num_sequences <= 0:
-        raise ValueError("--num-sequences must be > 0")
+        raise ValueError("--num-sequences must be > 0")  # noqa: TRY003
     if args.sequence_len <= 0:
-        raise ValueError("--sequence-len must be > 0")
+        raise ValueError("--sequence-len must be > 0")  # noqa: TRY003
     if args.feature_dim <= 0:
-        raise ValueError("--feature-dim must be > 0")
+        raise ValueError("--feature-dim must be > 0")  # noqa: TRY003
     if args.action_noise < 0.0:
-        raise ValueError("--action-noise must be >= 0")
+        raise ValueError("--action-noise must be >= 0")  # noqa: TRY003
     if args.wind_std < 0.0:
-        raise ValueError("--wind-std must be >= 0")
+        raise ValueError("--wind-std must be >= 0")  # noqa: TRY003
     if args.actuation_noise_std < 0.0:
-        raise ValueError("--actuation-noise-std must be >= 0")
+        raise ValueError("--actuation-noise-std must be >= 0")  # noqa: TRY003
     if args.latency_steps < 0:
-        raise ValueError("--latency-steps must be >= 0")
+        raise ValueError("--latency-steps must be >= 0")  # noqa: TRY003
 
 
-def _state_to_feature(pose: np.ndarray, pose_delta: np.ndarray, motors: np.ndarray, feature_dim: int, rng: np.random.Generator) -> np.ndarray:
+def _state_to_feature(
+    pose: np.ndarray, pose_delta: np.ndarray, motors: np.ndarray, feature_dim: int, rng: np.random.Generator
+) -> np.ndarray:
     base = np.concatenate(
         [
             pose,
@@ -111,15 +124,14 @@ def build_dataset(args: argparse.Namespace) -> Path:
 
             if args.latency_steps > 0:
                 cmd_queue.append(applied)
-                if len(cmd_queue) <= args.latency_steps:
-                    applied = np.zeros(4, dtype=np.float32)
-                else:
-                    applied = cmd_queue.pop(0)
+                applied = np.zeros(4, dtype=np.float32) if len(cmd_queue) <= args.latency_steps else cmd_queue.pop(0)
 
             out = sim.step(applied)
 
             if args.wind_std > 0.0:
-                sim.state.velocity = sim.state.velocity + rng.normal(0.0, args.wind_std, size=3).astype(np.float32) * sim.cfg.dt
+                sim.state.velocity = (
+                    sim.state.velocity + rng.normal(0.0, args.wind_std, size=3).astype(np.float32) * sim.cfg.dt
+                )
                 sim.state.position = sim.state.position + sim.state.velocity * sim.cfg.dt
                 out["pose"][:3] = sim.state.position.astype(np.float32)
             pose = out["pose"]
@@ -157,19 +169,40 @@ def build_dataset(args: argparse.Namespace) -> Path:
         seq_timestamps.append(np.asarray(t_list, dtype=np.int64))
         seq_flight_plan.append(np.stack(flight_plan_list, axis=0))
 
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(output, "w") as h5:
-        h5.create_dataset("features", data=np.stack(seq_features, axis=0), compression="gzip")
-        h5.create_dataset("actions", data=np.stack(seq_actions, axis=0), compression="gzip")
-        h5.create_dataset("motor_commands", data=np.stack(seq_motor, axis=0), compression="gzip")
-        h5.create_dataset("pose", data=np.stack(seq_pose, axis=0), compression="gzip")
-        h5.create_dataset("pose_delta", data=np.stack(seq_pose_delta, axis=0), compression="gzip")
-        h5.create_dataset("reward", data=np.stack(seq_reward, axis=0), compression="gzip")
-        h5.create_dataset("continue", data=np.stack(seq_continue, axis=0), compression="gzip")
-        h5.create_dataset("timestamps_us", data=np.stack(seq_timestamps, axis=0), compression="gzip")
-        h5.create_dataset("flight_plan", data=np.stack(seq_flight_plan, axis=0), compression="gzip")
-
+    arrays = {
+        "features": np.stack(seq_features, axis=0),
+        "actions": np.stack(seq_actions, axis=0),
+        "motor_commands": np.stack(seq_motor, axis=0),
+        "pose": np.stack(seq_pose, axis=0),
+        "pose_delta": np.stack(seq_pose_delta, axis=0),
+        "reward": np.stack(seq_reward, axis=0),
+        "continue": np.stack(seq_continue, axis=0),
+        "timestamps_us": np.stack(seq_timestamps, axis=0),
+        "flight_plan": np.stack(seq_flight_plan, axis=0),
+    }
+    output = write_sequence_dataset(args.output, arrays)
+    record = register_dataset(
+        dataset_path=output,
+        dataset_name=args.dataset_name,
+        transform_name="build_sim_rollout_dataset",
+        split=args.split,
+        source_uri=args.source_uri,
+        parent_ids=args.parent_dataset_id,
+        metadata={
+            "actuation_noise_std": args.actuation_noise_std,
+            "action_noise": args.action_noise,
+            "feature_dim": args.feature_dim,
+            "latency_steps": args.latency_steps,
+            "num_sequences": args.num_sequences,
+            "seed": args.seed,
+            "sequence_len": args.sequence_len,
+            "wind_std": args.wind_std,
+        },
+        schema=describe_arrays(arrays),
+        catalog_root=args.catalog_root,
+    )
+    logger.info("registered dataset: %s", record.dataset_id)
+    logger.info("dataset manifest: %s", record.manifest_path)
     return output
 
 

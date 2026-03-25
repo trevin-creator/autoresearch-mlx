@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import h5py
 import haiku as hk
@@ -11,6 +11,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from spyx import fpga_models as fm
+
+ERR_NO_EXAMPLES_TO_WRITE = "No examples to write."
 
 
 @dataclass(frozen=True)
@@ -172,7 +174,7 @@ def write_feature_hdf5(examples: list[FeatureSequenceExample], output_path: str 
     """Persist feature/action sequences in a LeWM-friendly HDF5 layout."""
 
     if not examples:
-        raise ValueError("No examples to write.")
+        raise ValueError(ERR_NO_EXAMPLES_TO_WRITE)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)

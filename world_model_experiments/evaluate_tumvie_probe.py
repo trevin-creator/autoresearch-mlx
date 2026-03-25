@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
 
+from world_model_experiments._io import load_sequence_dataset
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureLeWmConfig
 
 
@@ -22,11 +22,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_dataset(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
-    with h5py.File(path, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        actions = np.asarray(h5["actions"], dtype=np.float32)
-        pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-        flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
+    dataset = load_sequence_dataset(path)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    actions = np.asarray(dataset["actions"], dtype=np.float32)
+    pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float32)
+    flight_plan = np.asarray(dataset["flight_plan"], dtype=np.float32) if "flight_plan" in dataset else None
     return features, actions, pose_delta, flight_plan
 
 
@@ -62,7 +62,7 @@ def main() -> None:
     features, actions, pose_delta, flight_plan = _load_dataset(args.dataset)
     if args.use_flight_plan:
         if flight_plan is None:
-            raise ValueError("--use-flight-plan set but dataset has no flight_plan key")
+            raise ValueError("--use-flight-plan set but dataset has no flight_plan key")  # noqa: TRY003
         actions = np.concatenate([actions, flight_plan], axis=-1)
     emb = _encode_embeddings(model, features, actions)
 
@@ -86,8 +86,8 @@ def main() -> None:
     r2 = 1.0 - np.sum((pred - y[val_idx]) ** 2, axis=0) / np.maximum(denom, 1e-8)
 
     names = ["dx", "dy", "dz", "droll", "dpitch", "dyaw"]
-    print("linear_probe_mse", {name: float(val) for name, val in zip(names, mse)})
-    print("linear_probe_r2", {name: float(val) for name, val in zip(names, r2)})
+    print("linear_probe_mse", {name: float(val) for name, val in zip(names, mse, strict=False)})
+    print("linear_probe_r2", {name: float(val) for name, val in zip(names, r2, strict=False)})
     print("linear_probe_mean_mse", float(np.mean(mse)))
 
 

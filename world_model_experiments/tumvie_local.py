@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import h5py
 import hdf5plugin  # noqa: F401  Registers Blosc HDF5 filters.
@@ -14,8 +14,9 @@ from world_model_experiments.snn_feature_pipeline import (
     StereoImuBatch,
 )
 
-
 TUMVIE_SENSOR_HW = (720, 1280)
+ERR_NO_TUMVIE_WINDOWS = "No TUMVIE windows were generated; check timing and recording availability."
+ERR_NO_TUMVIE_SEQUENCES = "No TUMVIE sequences were generated; try increasing max_windows or reducing sequence_len."
 
 
 @dataclass(frozen=True)
@@ -198,10 +199,24 @@ def iter_tumvie_windows(cfg: TumvieWindowConfig) -> Iterator[TumvieWindowSample]
                 continue
 
             left_frames = _rasterize_events(
-                left_t, left_x, left_y, left_p, start_us, int(end_us), cfg.sample_t, output_hw,
+                left_t,
+                left_x,
+                left_y,
+                left_p,
+                start_us,
+                int(end_us),
+                cfg.sample_t,
+                output_hw,
             )
             right_frames = _rasterize_events(
-                right_t, right_x, right_y, right_p, start_us, int(end_us), cfg.sample_t, output_hw,
+                right_t,
+                right_x,
+                right_y,
+                right_p,
+                start_us,
+                int(end_us),
+                cfg.sample_t,
+                output_hw,
             )
             imu_seq = _interp_series(sample_times, imu_times, imu_values)
             action = np.mean(imu_seq, axis=0, keepdims=True).astype(np.float32)
@@ -236,7 +251,7 @@ def build_tumvie_feature_dataset(
     extractor = SpyxStereoImuFeatureExtractor(snn_cfg)
     samples = list(iter_tumvie_windows(tumvie_cfg))
     if not samples:
-        raise ValueError("No TUMVIE windows were generated; check timing and recording availability.")
+        raise ValueError(ERR_NO_TUMVIE_WINDOWS)
 
     features_per_window: list[np.ndarray] = []
     actions_per_window: list[np.ndarray] = []
@@ -270,7 +285,7 @@ def build_tumvie_feature_dataset(
         flight_plan_per_window.append(np.concatenate(blocks, axis=0).astype(np.float32))
 
     if len(features_per_window) < sequence_len:
-        raise ValueError("No TUMVIE sequences were generated; try increasing max_windows or reducing sequence_len.")
+        raise ValueError(ERR_NO_TUMVIE_SEQUENCES)
 
     seq_features = []
     seq_actions = []

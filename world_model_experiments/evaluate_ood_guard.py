@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 
-import h5py
 import numpy as np
 
+from world_model_experiments._io import load_sequence_dataset
 
 STD_FLOOR = 1e-6
 
@@ -20,13 +20,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        if "features" not in h5:
-            raise ValueError("dataset has no features key")
-        feat = np.asarray(h5["features"], dtype=np.float64)
+    dataset = load_sequence_dataset(args.dataset)
+    if "features" not in dataset:
+        raise ValueError("dataset has no features key")  # noqa: TRY003
+    feat = np.asarray(dataset["features"], dtype=np.float64)
 
     if feat.ndim != 3:
-        raise ValueError(f"features should be [N,T,D], got {feat.shape}")
+        raise ValueError(f"features should be [N,T,D], got {feat.shape}")  # noqa: TRY003
 
     flat = feat.reshape(-1, feat.shape[-1])
     mu = np.mean(flat, axis=0, keepdims=True)

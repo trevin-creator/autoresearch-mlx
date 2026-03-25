@@ -60,12 +60,171 @@ This folder provides a practical scaffold for your requested stack:
 ```text
 Tonic stereo-event + IMU windows
   -> Spyx stereo/IMU SNN feature vectors
-  -> HDF5 feature/action sequences
+  -> versioned parquet or HDF5 feature/action sequences + lineage manifest
   -> LeWM-style feature JEPA training
   -> embedding predictor checkpoint
   -> ONNX export
   -> Dreamer-like planner over embedding dynamics
 ```
+
+## Managed datasets and lineage
+
+The dataset builders now support managed outputs under `artifacts/datasets/...`
+and automatically register lineage metadata in `artifacts/data_catalog/`.
+
+Each derived dataset gets:
+
+- a versioned data artifact (`.parquet` or `.h5`)
+- an adjacent manifest file (`data.<ext>.manifest.json`)
+- a row in the parquet registry (`artifacts/data_catalog/dataset_registry.parquet`)
+
+The manifest records:
+
+- `dataset_id`, `dataset_name`, and content-addressed `version`
+- `source_uri` for raw provenance (local path, S3 URI, Hugging Face URI, simulator URI)
+- `parent_ids` for upstream dataset lineage
+- transform metadata and tensor schema
+
+That gives MLflow, Optuna, or any higher-level autoresearch loop a stable dataset
+identifier to log instead of a loose file path.
+
+### Managed simulator dataset example
+
+```bash
+python -m world_model_experiments.build_sim_rollout_dataset \
+  --output artifacts/datasets/sim_motor_rollouts/20260325T120000Z/data.parquet \
+  --dataset-name sim_motor_rollouts \
+  --source-uri simulator://quad_motor_dynamics
+```
+
+### Managed TUMVIE dataset example
+
+```bash
+python -m world_model_experiments.build_tumvie_feature_dataset \
+  --recording-dir spyx/research/data/TUMVIE/mocap-6dof \
+  --output artifacts/datasets/tumvie_features/20260325T120000Z/data.parquet \
+  --dataset-name tumvie_features
+```
+
+Both commands emit a dataset manifest next to the data artifact and register the
+dataset in the parquet catalog.
+
+## MLflow-tracked multiseed runs
+
+`run_informed_multiseed_report.py` can now open an MLflow parent run and nested
+per-seed child runs while automatically logging the managed dataset reference.
+
+```bash
+python -m world_model_experiments.run_informed_multiseed_report \
+  --dataset artifacts/datasets/tumvie_features/20260325T120000Z/data.parquet \
+  --output-root artifacts/tumvie/informed_multiseed \
+  --seeds 0,1,2 \
+  --epochs 3 \
+  --mlflow-experiment world_model/informed_multiseed \
+  --mlflow-tracking-uri artifacts/mlruns
+```
+
+This logs:
+
+- parent run configuration and aggregate deltas
+- nested runs for each `(seed, variant)` pair
+- the dataset manifest as an MLflow artifact
+- artifact reports (`seed_metrics.csv`, `delta_summary.csv`, `report.md`)
+
+## Materialize external datasets into lineage catalog
+
+Use `materialize_dataset.py` to bring external sources (local files, `s3://`,
+`hf://`, `http(s)://`) into the managed dataset tree with a manifest + catalog row.
+
+```bash
+python -m world_model_experiments.materialize_dataset \
+  --source-uri s3://my-bucket/datasets/tumvie_features.parquet \
+  --output artifacts/datasets/tumvie_features/20260325T140000Z/data.parquet \
+  --dataset-name tumvie_features
+```
+
+For Hugging Face:
+
+```bash
+python -m world_model_experiments.materialize_dataset \
+  --source-uri hf://org/dataset/train.parquet \
+  --output artifacts/datasets/external/train.parquet \
+  --dataset-name hf_train_split \
+  --hf-repo-type dataset \
+  --hf-revision main
+```
+
+## Optuna + MLflow search
+
+`run_optuna_search.py` performs architecture and hyperparameter search for
+informed Dreamer, with one nested MLflow run per trial and dataset lineage tags.
+
+```bash
+python -m world_model_experiments.run_optuna_search \
+  --dataset artifacts/datasets/tumvie_features/20260325T120000Z/data.parquet \
+  --output-root artifacts/search/informed_optuna \
+  --study-name informed_dreamer_search \
+  --n-trials 20 \
+  --epochs 3 \
+  --metric pose_delta_mse \
+  --direction minimize \
+  --mlflow-experiment world_model/optuna_informed \
+  --mlflow-tracking-uri artifacts/mlruns
+```
+
+Optional: provide a JSON search-space spec with `--search-space-json`.
+
+Example `search_space.json`:
+
+```json
+{
+  "embed_dim": {"type": "int", "low": 64, "high": 192, "step": 32},
+  "hidden_dim": {"type": "int", "low": 128, "high": 384, "step": 64},
+  "horizon": {"type": "int", "low": 4, "high": 10, "step": 2},
+  "lr": {"type": "float", "low": 0.0001, "high": 0.002, "log": true},
+  "weight_decay": {"type": "float", "low": 0.000001, "high": 0.001, "log": true},
+  "batch_size": {"type": "categorical", "choices": [8, 16, 32]}
+}
+```
+
+Search space (current defaults):
+
+- `embed_dim`: 64..256 (step 32)
+- `hidden_dim`: 128..512 (step 64)
+- `horizon`: 4..12 (step 2)
+- `lr`: 1e-4..3e-3 (log)
+- `weight_decay`: 1e-6..1e-3 (log)
+- `batch_size`: {8, 16, 32}
+
+## MLflow for standalone trainers
+
+Both `train_feature_lewm.py` and `train_informed_dreamer.py` now support:
+
+- `--mlflow-experiment`
+- `--mlflow-tracking-uri`
+- `--run-name`
+
+Example:
+
+```bash
+python -m world_model_experiments.train_informed_dreamer \
+  --dataset artifacts/datasets/tumvie_features/20260325T120000Z/data.parquet \
+  --output-dir artifacts/tumvie/informed_dreamer \
+  --epochs 5 \
+  --batch-size 16 \
+  --mlflow-experiment world_model/informed_single \
+  --mlflow-tracking-uri artifacts/mlruns
+```
+
+The same MLflow controls are also available in high-level runners:
+
+- `run_informed_ablation.py`
+- `run_motor_multiseed_report.py`
+- `run_motor_robustness_report.py`
+- `run_motor_curriculum_train.py`
+
+These runners create a parent run plus nested runs per variant/seed/stage and
+automatically log dataset lineage tags when a managed dataset manifest exists.
 
 ## Quick start
 

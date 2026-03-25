@@ -4,8 +4,9 @@ import argparse
 import json
 from pathlib import Path
 
-import h5py
 import numpy as np
+
+from world_model_experiments._io import load_sequence_dataset
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,7 +23,7 @@ def _estimate_delay(cmd: np.ndarray, response: np.ndarray, max_delay: int) -> in
     for d in range(max_delay + 1):
         if d >= len(cmd) - 2:
             break
-        c = np.corrcoef(cmd[:-d or None], response[d:])[0, 1]
+        c = np.corrcoef(cmd[: -d or None], response[d:])[0, 1]
         c = 0.0 if np.isnan(c) else float(c)
         if c > best_c:
             best_c = c
@@ -33,11 +34,11 @@ def _estimate_delay(cmd: np.ndarray, response: np.ndarray, max_delay: int) -> in
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        if "motor_commands" not in h5 or "pose_delta" not in h5:
-            raise ValueError("dataset must include motor_commands and pose_delta")
-        cmd = np.asarray(h5["motor_commands"], dtype=np.float64)
-        pose_delta = np.asarray(h5["pose_delta"], dtype=np.float64)
+    dataset = load_sequence_dataset(args.dataset)
+    if "motor_commands" not in dataset or "pose_delta" not in dataset:
+        raise ValueError("dataset must include motor_commands and pose_delta")  # noqa: TRY003
+    cmd = np.asarray(dataset["motor_commands"], dtype=np.float64)
+    pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float64)
 
     u = cmd.reshape(-1, cmd.shape[-1])
     y = pose_delta.reshape(-1, pose_delta.shape[-1])
@@ -50,7 +51,7 @@ def main() -> None:
     delay_yaw = _estimate_delay(u_mean, yaw_response, args.max_delay)
 
     d = max(delay_v, delay_yaw)
-    u_aligned = u_mean[:-d or None]
+    u_aligned = u_mean[: -d or None]
     v_aligned = v_response[d:]
     y_aligned = yaw_response[d:]
 

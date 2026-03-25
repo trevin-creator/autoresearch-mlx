@@ -3,19 +3,17 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 
-import h5py
 import numpy as np
 import torch
 
+from world_model_experiments._io import load_actions, load_sequence_dataset
 from world_model_experiments.autopilot_bridge import ArbitrationConfig, MotorAutopilotBridge
 from world_model_experiments.command_interface import CommandInterfaceConfig
 from world_model_experiments.fallback_controller import ConservativeFallbackController, FallbackControllerConfig
 from world_model_experiments.flight_state_machine import FlightStateMachine, FlightStateMachineConfig
-from world_model_experiments._io import load_actions
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.safety_shield import SafetyShieldConfig
 from world_model_experiments.telemetry import TelemetryLogger
-
 
 STD_FLOOR = 1e-6
 
@@ -49,13 +47,13 @@ def _compute_ood_scores(features: np.ndarray) -> np.ndarray:
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        actions = load_actions(h5, args.use_motor_commands, args.use_flight_plan)
-        flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
-        pose = np.asarray(h5["pose"], dtype=np.float32)
-        pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-        timestamps = np.asarray(h5["timestamps_us"], dtype=np.int64)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    actions = load_actions(dataset, args.use_motor_commands, args.use_flight_plan)
+    flight_plan = np.asarray(dataset["flight_plan"], dtype=np.float32) if "flight_plan" in dataset else None
+    pose = np.asarray(dataset["pose"], dtype=np.float32)
+    pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float32)
+    timestamps = np.asarray(dataset["timestamps_us"], dtype=np.int64)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])

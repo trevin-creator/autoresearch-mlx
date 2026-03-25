@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 
-import h5py
 import numpy as np
 import torch
 
 from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_actions, load_sequence_dataset
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_simulator import REWARD_TRANSLATION_WEIGHT, REWARD_YAW_WEIGHT
 
@@ -31,19 +31,14 @@ def _bucket_name(speed: float) -> str:
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        if args.use_motor_commands:
-            if "motor_commands" not in h5:
-                raise ValueError(ERR_NO_MOTOR_COMMANDS)
-            actions = np.asarray(h5["motor_commands"], dtype=np.float32)
-        else:
-            actions = np.asarray(h5["actions"], dtype=np.float32)
-            if args.use_flight_plan and "flight_plan" in h5:
-                actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    if args.use_motor_commands and "motor_commands" not in dataset:
+        raise ValueError(ERR_NO_MOTOR_COMMANDS)
+    actions = load_actions(dataset, args.use_motor_commands, args.use_flight_plan)
 
-        pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-        reward = np.asarray(h5["reward"], dtype=np.float32) if "reward" in h5 else None
+    pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float32)
+    reward = np.asarray(dataset["reward"], dtype=np.float32) if "reward" in dataset else None
 
     if reward is None:
         transl = np.linalg.norm(pose_delta[..., :3], axis=-1)

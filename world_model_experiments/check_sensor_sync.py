@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 
-import h5py
 import numpy as np
+
+from world_model_experiments._io import load_sequence_dataset
 
 
 def parse_args() -> argparse.Namespace:
@@ -17,13 +18,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        if "timestamps_us" not in h5:
-            raise ValueError("dataset has no timestamps_us key")
-        ts = np.asarray(h5["timestamps_us"], dtype=np.float64)
+    dataset = load_sequence_dataset(args.dataset)
+    if "timestamps_us" not in dataset:
+        raise ValueError("dataset has no timestamps_us key")  # noqa: TRY003
+    ts = np.asarray(dataset["timestamps_us"], dtype=np.float64)
 
     if ts.ndim != 2:
-        raise ValueError(f"timestamps_us should be [N,T], got shape={ts.shape}")
+        raise ValueError(f"timestamps_us should be [N,T], got shape={ts.shape}")  # noqa: TRY003
 
     diffs = np.diff(ts, axis=1)
     monotonic_viol = np.sum(diffs <= 0)
@@ -42,11 +43,7 @@ def main() -> None:
         "jitter_p95_us": jitter_p95,
         "min_gap_us": min_gap,
         "max_gap_us": max_gap,
-        "pass": float(
-            (monotonic_viol == 0)
-            and (jitter_p95 <= args.max_jitter_us)
-            and (max_gap <= args.max_gap_us)
-        ),
+        "pass": float((monotonic_viol == 0) and (jitter_p95 <= args.max_jitter_us) and (max_gap <= args.max_gap_us)),
     }
 
     print("sensor_sync", result)

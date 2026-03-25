@@ -7,12 +7,12 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-import h5py
 import numpy as np
 import onnxruntime as ort
 import torch
 
 from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_sequence_dataset
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureJepaOnnxWrapper, FeatureLeWmConfig
 
 
@@ -33,17 +33,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_data(path: str, use_motor_commands: bool, action_dim: int) -> tuple[np.ndarray, np.ndarray]:
-    with h5py.File(path, "r") as h5:
-        feat = np.asarray(h5["features"], dtype=np.float32)
-        if use_motor_commands:
-            if "motor_commands" not in h5:
-                raise ValueError(ERR_NO_MOTOR_COMMANDS)
-            act = np.asarray(h5["motor_commands"], dtype=np.float32)
-        else:
-            act = np.asarray(h5["actions"], dtype=np.float32)
-            if "flight_plan" in h5 and act.shape[-1] != action_dim:
-                fp = np.asarray(h5["flight_plan"], dtype=np.float32)
-                act = np.concatenate([act, fp], axis=-1)
+    dataset = load_sequence_dataset(path)
+    feat = np.asarray(dataset["features"], dtype=np.float32)
+    if use_motor_commands:
+        if "motor_commands" not in dataset:
+            raise ValueError(ERR_NO_MOTOR_COMMANDS)
+        act = np.asarray(dataset["motor_commands"], dtype=np.float32)
+    else:
+        act = np.asarray(dataset["actions"], dtype=np.float32)
+        if "flight_plan" in dataset and act.shape[-1] != action_dim:
+            fp = np.asarray(dataset["flight_plan"], dtype=np.float32)
+            act = np.concatenate([act, fp], axis=-1)
     return feat, act
 
 
@@ -171,7 +171,14 @@ def main() -> None:
             w.writerow(row)
 
         rep_path = csv_path.with_name(csv_path.stem + "_repeats.csv")
-        rep_fieldnames = ["tag", "repeat", "latency_ms_mean", "latency_ms_p95", "latency_ms_jitter_std", "parity_max_abs_mean"]
+        rep_fieldnames = [
+            "tag",
+            "repeat",
+            "latency_ms_mean",
+            "latency_ms_p95",
+            "latency_ms_jitter_std",
+            "parity_max_abs_mean",
+        ]
         write_rep_header = not rep_path.exists()
         with rep_path.open("a", newline="") as rf:
             rw = csv.DictWriter(rf, fieldnames=rep_fieldnames)

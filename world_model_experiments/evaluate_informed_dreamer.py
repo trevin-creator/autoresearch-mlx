@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
 
 from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_actions, load_sequence_dataset
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 
 
@@ -23,20 +22,15 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        if args.use_motor_commands:
-            if "motor_commands" not in h5:
-                raise ValueError(ERR_NO_MOTOR_COMMANDS)
-            actions = np.asarray(h5["motor_commands"], dtype=np.float32)
-        else:
-            actions = np.asarray(h5["actions"], dtype=np.float32)
-        if args.use_flight_plan and "flight_plan" in h5:
-            actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
-        pose = np.asarray(h5["pose"], dtype=np.float32)
-        pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-        reward = np.asarray(h5["reward"], dtype=np.float32)
-        cont = np.asarray(h5["continue"], dtype=np.float32)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    if args.use_motor_commands and "motor_commands" not in dataset:
+        raise ValueError(ERR_NO_MOTOR_COMMANDS)
+    actions = load_actions(dataset, use_motor_commands=args.use_motor_commands, use_flight_plan=args.use_flight_plan)
+    pose = np.asarray(dataset["pose"], dtype=np.float32)
+    pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float32)
+    reward = np.asarray(dataset["reward"], dtype=np.float32)
+    cont = np.asarray(dataset["continue"], dtype=np.float32)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])
@@ -51,17 +45,21 @@ def main() -> None:
     pd_mse = float(np.mean((out["pose_delta"].cpu().numpy() - pose_delta) ** 2))
     rw_mse = float(np.mean((out["reward"].cpu().numpy() - reward) ** 2))
     cont_prob = 1.0 / (1.0 + np.exp(-out["continue_logit"].cpu().numpy()))
-    cont_bce = float(np.mean(
-        -(cont * np.log(np.clip(cont_prob, 1e-8, 1.0))
-          + (1.0 - cont) * np.log(np.clip(1.0 - cont_prob, 1e-8, 1.0)))
-    ))
+    cont_bce = float(
+        np.mean(
+            -(cont * np.log(np.clip(cont_prob, 1e-8, 1.0)) + (1.0 - cont) * np.log(np.clip(1.0 - cont_prob, 1e-8, 1.0)))
+        )
+    )
 
-    print("informed_eval", {
-        "pose_mse": pose_mse,
-        "pose_delta_mse": pd_mse,
-        "reward_mse": rw_mse,
-        "continue_bce": cont_bce,
-    })
+    print(
+        "informed_eval",
+        {
+            "pose_mse": pose_mse,
+            "pose_delta_mse": pd_mse,
+            "reward_mse": rw_mse,
+            "continue_bce": cont_bce,
+        },
+    )
 
 
 if __name__ == "__main__":

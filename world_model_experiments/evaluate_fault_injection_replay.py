@@ -3,19 +3,17 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 
-import h5py
 import numpy as np
 import torch
 
+from world_model_experiments._io import load_actions, load_sequence_dataset
 from world_model_experiments.autopilot_bridge import ArbitrationConfig, MotorAutopilotBridge
 from world_model_experiments.command_interface import CommandInterfaceConfig
 from world_model_experiments.fallback_controller import ConservativeFallbackController, FallbackControllerConfig
 from world_model_experiments.flight_state_machine import FlightStateMachine, FlightStateMachineConfig
-from world_model_experiments._io import load_actions
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.safety_shield import SafetyShieldConfig
 from world_model_experiments.telemetry import TelemetryLogger
-
 
 STD_FLOOR = 1e-6
 
@@ -28,7 +26,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ood-threshold", type=float, default=0.10)
     p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--use-flight-plan", action="store_true")
-    p.add_argument("--fault-mode", type=str, default="stuck_low", choices=["none", "stuck_low", "stuck_high", "dropout", "scale_loss"])
+    p.add_argument(
+        "--fault-mode",
+        type=str,
+        default="stuck_low",
+        choices=["none", "stuck_low", "stuck_high", "dropout", "scale_loss"],
+    )
     p.add_argument("--fault-strength", type=float, default=0.6)
     p.add_argument("--fault-start-step", type=int, default=2)
     p.add_argument("--anomaly-ood-gain", type=float, default=2.0)
@@ -45,7 +48,9 @@ def _compute_ood_scores(features: np.ndarray) -> np.ndarray:
     return frame.reshape(features.shape[0], features.shape[1])
 
 
-def _inject_fault(command: np.ndarray, mode: str, strength: float, step: int, start_step: int) -> tuple[np.ndarray, float]:
+def _inject_fault(
+    command: np.ndarray, mode: str, strength: float, step: int, start_step: int
+) -> tuple[np.ndarray, float]:
     cmd = np.asarray(command, dtype=np.float32)
     if mode == "none" or step < start_step:
         return cmd, 0.0
@@ -67,13 +72,13 @@ def _inject_fault(command: np.ndarray, mode: str, strength: float, step: int, st
 def main() -> None:
     args = parse_args()
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        actions = load_actions(h5, args.use_motor_commands, args.use_flight_plan)
-        flight_plan = np.asarray(h5["flight_plan"], dtype=np.float32) if "flight_plan" in h5 else None
-        pose = np.asarray(h5["pose"], dtype=np.float32)
-        pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-        timestamps = np.asarray(h5["timestamps_us"], dtype=np.int64)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    actions = load_actions(dataset, args.use_motor_commands, args.use_flight_plan)
+    flight_plan = np.asarray(dataset["flight_plan"], dtype=np.float32) if "flight_plan" in dataset else None
+    pose = np.asarray(dataset["pose"], dtype=np.float32)
+    pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float32)
+    timestamps = np.asarray(dataset["timestamps_us"], dtype=np.int64)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])
@@ -127,7 +132,9 @@ def main() -> None:
 
         for t in range(features.shape[1]):
             nominal = planner_cmds[t, :4]
-            injected, fault_delta = _inject_fault(nominal, args.fault_mode, args.fault_strength, t, args.fault_start_step)
+            injected, fault_delta = _inject_fault(
+                nominal, args.fault_mode, args.fault_strength, t, args.fault_start_step
+            )
             state_norm = float(np.linalg.norm(pose[ep, t, :3]) + np.linalg.norm(pose[ep, t, 3:]))
             effective_ood = float(ood_scores[ep, t] + args.anomaly_ood_gain * fault_delta)
 

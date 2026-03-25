@@ -4,11 +4,10 @@ import argparse
 import json
 from collections import deque
 
-import h5py
 import numpy as np
 import torch
 
-from world_model_experiments._io import load_actions
+from world_model_experiments._io import load_actions, load_sequence_dataset
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
@@ -61,12 +60,12 @@ def _scenario_matrix(args: argparse.Namespace) -> dict[str, dict[str, float | in
     latencies = _parse_ints(args.latency_steps)
     for w in winds:
         for n in noises:
-            for l in latencies:
-                key = f"w{w:.2f}_n{n:.2f}_l{l}"
+            for latency in latencies:
+                key = f"w{w:.2f}_n{n:.2f}_l{latency}"
                 scenarios[key] = {
                     "wind_std": float(w),
                     "act_noise_std": float(n),
-                    "latency_steps": int(l),
+                    "latency_steps": int(latency),
                 }
     return scenarios
 
@@ -145,10 +144,7 @@ def _evaluate_scenario(
 
             if latency_steps > 0:
                 cmd_queue.append(cmd)
-                if len(cmd_queue) <= latency_steps:
-                    applied = np.zeros_like(cmd)
-                else:
-                    applied = cmd_queue.popleft()
+                applied = np.zeros_like(cmd) if len(cmd_queue) <= latency_steps else cmd_queue.popleft()
             else:
                 applied = cmd
 
@@ -162,7 +158,9 @@ def _evaluate_scenario(
 
             # Disturb translational state to emulate wind/gust impulses.
             if wind_std > 0.0:
-                sim.state.velocity = sim.state.velocity + rng.normal(0.0, wind_std, size=3).astype(np.float32) * sim.cfg.dt
+                sim.state.velocity = (
+                    sim.state.velocity + rng.normal(0.0, wind_std, size=3).astype(np.float32) * sim.cfg.dt
+                )
                 sim.state.position = sim.state.position + sim.state.velocity * sim.cfg.dt
                 out["pose"][:3] = sim.state.position.astype(np.float32)
 
@@ -208,9 +206,9 @@ def main() -> None:
     args = parse_args()
     rng = np.random.default_rng(args.seed)
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        actions = load_actions(h5, args.use_motor_commands, args.use_flight_plan)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    actions = load_actions(dataset, args.use_motor_commands, args.use_flight_plan)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])

@@ -1,10 +1,15 @@
 numpy>=1.24
 h5py>=3.10
 hdf5plugin>=5.1
+pyarrow>=16.0
 torch>=2.2
 onnx>=1.15
 onnxscript>=0.1
 onnxruntime>=1.17
+mlflow>=2.14
+optuna>=3.6
+boto3>=1.34
+huggingface-hub>=0.23
 jax>=0.4.25
 dm-haiku>=0.0.11
 spyx

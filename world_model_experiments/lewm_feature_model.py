@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as functional
 from torch import nn
-import torch.nn.functional as F
+
+ERR_SEQUENCE_TOO_SHORT = "Sequence too short for configured num_preds"
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ class FeatureJEPA(nn.Module):
 
         t_total = emb.shape[1]
         if t_total <= self.cfg.num_preds:
-            raise ValueError("Sequence too short for configured num_preds")
+            raise ValueError(ERR_SEQUENCE_TOO_SHORT)
 
         ctx_len = min(self.cfg.history_size, t_total - self.cfg.num_preds)
         emb_ctx = emb[:, :ctx_len]
@@ -131,7 +133,7 @@ class FeatureJEPA(nn.Module):
 
         pred = self.predict(emb_ctx, act_ctx)
 
-        pred_loss = F.mse_loss(pred, tgt)
+        pred_loss = functional.mse_loss(pred, tgt)
         sigreg_loss = self.reg(emb)
         total = pred_loss + self.cfg.sigreg_weight * sigreg_loss
 

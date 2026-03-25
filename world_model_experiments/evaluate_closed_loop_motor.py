@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import argparse
 
-import h5py
 import numpy as np
 import torch
 
-from world_model_experiments._io import load_actions
+from world_model_experiments._io import load_actions, load_sequence_dataset
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_constraints import apply_motor_constraints
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
@@ -37,9 +36,9 @@ def main() -> None:
     args = parse_args()
     rng = np.random.default_rng(args.seed)
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"], dtype=np.float32)
-        actions = load_actions(h5, args.use_motor_commands, args.use_flight_plan)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"], dtype=np.float32)
+    actions = load_actions(dataset, args.use_motor_commands, args.use_flight_plan)
 
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     cfg = InformedDreamerConfig(**ckpt["config"])

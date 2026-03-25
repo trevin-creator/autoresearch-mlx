@@ -3,12 +3,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import h5py
 import numpy as np
 import onnxruntime as ort
 import torch
 
 from world_model_experiments._errors import ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_sequence_dataset
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureJepaOnnxWrapper, FeatureLeWmConfig
 
 
@@ -32,17 +32,17 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    with h5py.File(args.dataset, "r") as h5:
-        features = np.asarray(h5["features"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
-        if args.use_motor_commands:
-            if "motor_commands" not in h5:
-                raise ValueError(ERR_NO_MOTOR_COMMANDS)
-            actions = np.asarray(h5["motor_commands"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
-        else:
-            actions = np.asarray(h5["actions"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
-            if "flight_plan" in h5 and actions.shape[-1] != cfg.action_dim:
-                fp = np.asarray(h5["flight_plan"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
-                actions = np.concatenate([actions, fp], axis=-1)
+    dataset = load_sequence_dataset(args.dataset)
+    features = np.asarray(dataset["features"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
+    if args.use_motor_commands:
+        if "motor_commands" not in dataset:
+            raise ValueError(ERR_NO_MOTOR_COMMANDS)
+        actions = np.asarray(dataset["motor_commands"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
+    else:
+        actions = np.asarray(dataset["actions"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
+        if "flight_plan" in dataset and actions.shape[-1] != cfg.action_dim:
+            fp = np.asarray(dataset["flight_plan"][args.sample_idx : args.sample_idx + 1], dtype=np.float32)
+            actions = np.concatenate([actions, fp], axis=-1)
 
     feat_t = torch.from_numpy(features)
     act_t = torch.from_numpy(actions)

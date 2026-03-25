@@ -2,37 +2,40 @@ from __future__ import annotations
 
 import argparse
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 
-import h5py
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
 from world_model_experiments._errors import ERR_MOTOR_FP_EXCLUSIVE, ERR_NO_MOTOR_COMMANDS
+from world_model_experiments._io import load_actions, load_sequence_dataset
+from world_model_experiments.experiment_tracking import (
+    configure_mlflow,
+    log_dataset_record,
+    log_flat_params,
+    resolve_dataset_record,
+)
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
 from world_model_experiments.motor_simulator import REWARD_TRANSLATION_WEIGHT, REWARD_YAW_WEIGHT
 
 logger = logging.getLogger(__name__)
 
+ERR_DATASET_ARRAYS_UNINITIALIZED = "reward/continue arrays must be initialized before indexing"
+
 
 class InformedDataset(Dataset):
     def __init__(self, h5_path: str | Path, use_flight_plan: bool, use_motor_commands: bool) -> None:
-        with h5py.File(h5_path, "r") as h5:
-            self.features = np.asarray(h5["features"], dtype=np.float32)
-            if use_motor_commands:
-                if "motor_commands" not in h5:
-                    raise ValueError(ERR_NO_MOTOR_COMMANDS)
-                actions = np.asarray(h5["motor_commands"], dtype=np.float32)
-            else:
-                actions = np.asarray(h5["actions"], dtype=np.float32)
-            if use_flight_plan and "flight_plan" in h5:
-                actions = np.concatenate([actions, np.asarray(h5["flight_plan"], dtype=np.float32)], axis=-1)
-            self.actions = actions
-            self.pose = np.asarray(h5["pose"], dtype=np.float32)
-            self.pose_delta = np.asarray(h5["pose_delta"], dtype=np.float32)
-            self.reward = np.asarray(h5["reward"], dtype=np.float32) if "reward" in h5 else None
-            self.cont = np.asarray(h5["continue"], dtype=np.float32) if "continue" in h5 else None
+        dataset = load_sequence_dataset(h5_path)
+        self.features = np.asarray(dataset["features"], dtype=np.float32)
+        if use_motor_commands and "motor_commands" not in dataset:
+            raise ValueError(ERR_NO_MOTOR_COMMANDS)
+        self.actions = load_actions(dataset, use_motor_commands=use_motor_commands, use_flight_plan=use_flight_plan)
+        self.pose = np.asarray(dataset["pose"], dtype=np.float32)
+        self.pose_delta = np.asarray(dataset["pose_delta"], dtype=np.float32)
+        self.reward = np.asarray(dataset["reward"], dtype=np.float32) if "reward" in dataset else None
+        self.cont = np.asarray(dataset["continue"], dtype=np.float32) if "continue" in dataset else None
 
         if self.reward is None:
             transl = np.linalg.norm(self.pose_delta[..., :3], axis=-1)
@@ -48,7 +51,7 @@ class InformedDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         if self.reward is None or self.cont is None:
-            raise RuntimeError("reward/continue arrays must be initialized before indexing")
+            raise RuntimeError(ERR_DATASET_ARRAYS_UNINITIALIZED)
 
         return {
             "features": torch.from_numpy(self.features[idx]),
@@ -74,6 +77,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use-flight-plan", action="store_true")
     p.add_argument("--use-motor-commands", action="store_true")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--mlflow-experiment", type=str, default=None)
+    p.add_argument("--mlflow-tracking-uri", type=str, default="artifacts/mlruns")
+    p.add_argument("--run-name", type=str, default=None)
     return p.parse_args()
 
 
@@ -115,36 +121,36 @@ def train() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     best_val = float("inf")
     best_path = out_dir / "informed_dreamer_best.pt"
+    dataset_record = resolve_dataset_record(args.dataset)
+    mlflow = configure_mlflow(args.mlflow_experiment, args.mlflow_tracking_uri) if args.mlflow_experiment else None
+    run_context = mlflow.start_run(run_name=args.run_name or out_dir.name) if mlflow is not None else nullcontext()
 
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        train_wm = []
-        train_ac = []
-        for batch in train_loader:
-            feat = batch["features"].to(device)
-            act = batch["actions"].to(device)
-            pose = batch["pose"].to(device)
-            pose_delta = batch["pose_delta"].to(device)
-            reward = batch["reward"].to(device)
-            cont = batch["continue"].to(device)
+    with run_context:
+        if mlflow is not None:
+            log_dataset_record(mlflow, dataset_record)
+            log_flat_params(
+                mlflow,
+                {
+                    "dataset": args.dataset,
+                    "output_dir": str(out_dir),
+                    "epochs": args.epochs,
+                    "batch_size": args.batch_size,
+                    "lr": args.lr,
+                    "weight_decay": args.weight_decay,
+                    "embed_dim": args.embed_dim,
+                    "hidden_dim": args.hidden_dim,
+                    "horizon": args.horizon,
+                    "use_flight_plan": args.use_flight_plan,
+                    "use_motor_commands": args.use_motor_commands,
+                    "seed": args.seed,
+                },
+            )
 
-            wm_loss = model.world_loss(feat, act, pose, pose_delta, reward, cont)
-            ac_loss = model.actor_critic_loss(feat, act)
-            total = wm_loss["loss"] + ac_loss["loss"]
-
-            opt_wm.zero_grad(set_to_none=True)
-            total.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            opt_wm.step()
-
-            train_wm.append(float(wm_loss["loss"].item()))
-            train_ac.append(float(ac_loss["loss"].item()))
-
-        model.eval()
-        val_wm = []
-        val_ac = []
-        with torch.no_grad():
-            for batch in val_loader:
+        for epoch in range(1, args.epochs + 1):
+            model.train()
+            train_wm = []
+            train_ac = []
+            for batch in train_loader:
                 feat = batch["features"].to(device)
                 act = batch["actions"].to(device)
                 pose = batch["pose"].to(device)
@@ -153,26 +159,67 @@ def train() -> None:
                 cont = batch["continue"].to(device)
                 wm_loss = model.world_loss(feat, act, pose, pose_delta, reward, cont)
                 ac_loss = model.actor_critic_loss(feat, act)
-                val_wm.append(float(wm_loss["loss"].item()))
-                val_ac.append(float(ac_loss["loss"].item()))
+                total = wm_loss["loss"] + ac_loss["loss"]
 
-        tr_wm = float(np.mean(train_wm)) if train_wm else float("nan")
-        tr_ac = float(np.mean(train_ac)) if train_ac else float("nan")
-        va_wm = float(np.mean(val_wm)) if val_wm else float("nan")
-        va_ac = float(np.mean(val_ac)) if val_ac else float("nan")
-        logger.info("epoch=%03d train_wm=%.6f train_ac=%.6f val_wm=%.6f val_ac=%.6f", epoch, tr_wm, tr_ac, va_wm, va_ac)
+                opt_wm.zero_grad(set_to_none=True)
+                total.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                opt_wm.step()
 
-        ckpt = {
-            "model_state": model.state_dict(),
-            "config": cfg.__dict__,
-            "epoch": epoch,
-            "val_wm": va_wm,
-            "val_ac": va_ac,
-        }
-        torch.save(ckpt, out_dir / "informed_dreamer_last.pt")
-        if va_wm + va_ac < best_val:
-            best_val = va_wm + va_ac
-            torch.save(ckpt, best_path)
+                train_wm.append(float(wm_loss["loss"].item()))
+                train_ac.append(float(ac_loss["loss"].item()))
+
+            model.eval()
+            val_wm = []
+            val_ac = []
+            with torch.no_grad():
+                for batch in val_loader:
+                    feat = batch["features"].to(device)
+                    act = batch["actions"].to(device)
+                    pose = batch["pose"].to(device)
+                    pose_delta = batch["pose_delta"].to(device)
+                    reward = batch["reward"].to(device)
+                    cont = batch["continue"].to(device)
+                    wm_loss = model.world_loss(feat, act, pose, pose_delta, reward, cont)
+                    ac_loss = model.actor_critic_loss(feat, act)
+                    val_wm.append(float(wm_loss["loss"].item()))
+                    val_ac.append(float(ac_loss["loss"].item()))
+
+            tr_wm = float(np.mean(train_wm)) if train_wm else float("nan")
+            tr_ac = float(np.mean(train_ac)) if train_ac else float("nan")
+            va_wm = float(np.mean(val_wm)) if val_wm else float("nan")
+            va_ac = float(np.mean(val_ac)) if val_ac else float("nan")
+            logger.info(
+                "epoch=%03d train_wm=%.6f train_ac=%.6f val_wm=%.6f val_ac=%.6f", epoch, tr_wm, tr_ac, va_wm, va_ac
+            )
+            if mlflow is not None:
+                mlflow.log_metrics(
+                    {
+                        "train_wm": tr_wm,
+                        "train_ac": tr_ac,
+                        "val_wm": va_wm,
+                        "val_ac": va_ac,
+                        "val_total": va_wm + va_ac,
+                    },
+                    step=epoch,
+                )
+
+            ckpt = {
+                "model_state": model.state_dict(),
+                "config": cfg.__dict__,
+                "epoch": epoch,
+                "val_wm": va_wm,
+                "val_ac": va_ac,
+            }
+            torch.save(ckpt, out_dir / "informed_dreamer_last.pt")
+            if va_wm + va_ac < best_val:
+                best_val = va_wm + va_ac
+                torch.save(ckpt, best_path)
+
+        if mlflow is not None:
+            mlflow.log_metric("best_val_total", best_val)
+            mlflow.log_artifact(str(best_path), artifact_path="checkpoints")
+            mlflow.log_artifact(str(out_dir / "informed_dreamer_last.pt"), artifact_path="checkpoints")
 
     logger.info("best checkpoint: %s", best_path)
 
