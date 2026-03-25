@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import logging
 from pathlib import Path
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,13 +129,14 @@ def main() -> None:
         failures.append(f"onnx max_abs_diff {onnx.get('max_abs_diff')} > {args.max_parity_diff}")
 
     if failures:
-        print("phase35_gates FAILED")
+        logger.error("phase35_gates FAILED")
         for f in failures:
-            print("-", f)
+            logger.error("- %s", f)
         raise SystemExit(1)
 
-    print("phase35_gates PASSED")
+    logger.info("phase35_gates PASSED")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

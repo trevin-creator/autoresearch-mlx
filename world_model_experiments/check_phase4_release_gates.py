@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import logging
 from json import JSONDecodeError
 from pathlib import Path
 from typing import Any, cast
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -214,13 +217,14 @@ def main() -> None:
         )
 
     if failures:
-        print("phase4_release_gates FAILED")
+        logger.error("phase4_release_gates FAILED")
         for f in failures:
-            print("-", f)
+            logger.error("- %s", f)
         raise SystemExit(1)
 
-    print("phase4_release_gates PASSED")
+    logger.info("phase4_release_gates PASSED")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

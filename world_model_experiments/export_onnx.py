@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import torch
 
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureJepaOnnxWrapper, FeatureLeWmConfig
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:

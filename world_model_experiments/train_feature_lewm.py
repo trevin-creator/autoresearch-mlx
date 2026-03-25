@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import h5py
@@ -15,6 +16,8 @@ from world_model_experiments._errors import (
     ERR_SEQ_COUNT_MISMATCH,
 )
 from world_model_experiments.lewm_feature_model import FeatureJEPA, FeatureLeWmConfig
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureSequenceDataset(Dataset):
@@ -143,7 +146,7 @@ def train() -> None:
 
         train_loss = float(np.mean(train_losses)) if train_losses else float("nan")
         val_loss = float(np.mean(val_losses)) if val_losses else float("nan")
-        print(f"epoch={epoch:03d} train_loss={train_loss:.6f} val_loss={val_loss:.6f}")
+        logger.info("epoch=%03d train_loss=%.6f val_loss=%.6f", epoch, train_loss, val_loss)
 
         ckpt = {
             "model_state": model.state_dict(),
@@ -157,8 +160,9 @@ def train() -> None:
             best_val = val_loss
             torch.save(ckpt, best_path)
 
-    print(f"best checkpoint: {best_path}")
+    logger.info("best checkpoint: %s", best_path)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     train()

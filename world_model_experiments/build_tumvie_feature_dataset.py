@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from world_model_experiments.snn_feature_pipeline import SnnFeatureConfig
 from world_model_experiments.tumvie_local import TumvieWindowConfig, build_tumvie_feature_dataset
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,8 +63,9 @@ def main() -> None:
         sequence_len=args.sequence_len,
         output_path=args.output,
     )
-    print(f"wrote TUMVIE feature dataset: {out}")
+    logger.info("wrote TUMVIE feature dataset: %s", out)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

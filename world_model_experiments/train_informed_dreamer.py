@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import h5py
@@ -10,6 +11,8 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 from world_model_experiments._errors import ERR_MOTOR_FP_EXCLUSIVE, ERR_NO_MOTOR_COMMANDS
 from world_model_experiments.informed_dreamer_model import InformedDreamerConfig, InformedFeatureDreamer
+
+logger = logging.getLogger(__name__)
 
 
 class InformedDataset(Dataset):
@@ -156,7 +159,7 @@ def train() -> None:
         tr_ac = float(np.mean(train_ac)) if train_ac else float("nan")
         va_wm = float(np.mean(val_wm)) if val_wm else float("nan")
         va_ac = float(np.mean(val_ac)) if val_ac else float("nan")
-        print(f"epoch={epoch:03d} train_wm={tr_wm:.6f} train_ac={tr_ac:.6f} val_wm={va_wm:.6f} val_ac={va_ac:.6f}")
+        logger.info("epoch=%03d train_wm=%.6f train_ac=%.6f val_wm=%.6f val_ac=%.6f", epoch, tr_wm, tr_ac, va_wm, va_ac)
 
         ckpt = {
             "model_state": model.state_dict(),
@@ -170,8 +173,9 @@ def train() -> None:
             best_val = va_wm + va_ac
             torch.save(ckpt, best_path)
 
-    print(f"best checkpoint: {best_path}")
+    logger.info("best checkpoint: %s", best_path)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     train()

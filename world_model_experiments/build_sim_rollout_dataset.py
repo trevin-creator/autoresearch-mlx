@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import h5py
 import numpy as np
 
 from world_model_experiments.motor_simulator import QuadMotorDynamics, domain_randomized_config
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,8 +159,9 @@ def build_dataset(args: argparse.Namespace) -> Path:
 def main() -> None:
     args = parse_args()
     out = build_dataset(args)
-    print(f"wrote simulator rollout dataset: {out}")
+    logger.info("wrote simulator rollout dataset: %s", out)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()
