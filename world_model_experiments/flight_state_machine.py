@@ -147,15 +147,15 @@ class FlightStateMachine:
         diverged = tracking_error > self.cfg.max_tracking_error
 
         if self.mode == FlightMode.SHADOW:
-            self._shadow_healthy_steps = self._shadow_healthy_steps + 1 if healthy else 0
+            self._shadow_healthy_steps = (self._shadow_healthy_steps + 1) if healthy else 0
             if self._shadow_healthy_steps >= self.cfg.shadow_warmup_steps:
                 mode_changed, transition_reason = self._set_mode(FlightMode.AUTONOMOUS, "shadow_warmup_complete")
         elif self.mode == FlightMode.AUTONOMOUS:
-            self._fallback_bad_steps = self._fallback_bad_steps + 1 if (not healthy or diverged) else 0
+            self._fallback_bad_steps = (self._fallback_bad_steps + 1) if (not healthy or diverged) else 0
             if self._fallback_bad_steps >= self.cfg.fallback_hold_steps:
                 mode_changed, transition_reason = self._set_mode(FlightMode.FALLBACK, "planner_unhealthy")
         elif self.mode == FlightMode.FALLBACK:
-            self._recovery_good_steps = self._recovery_good_steps + 1 if (recovered and not diverged) else 0
+            self._recovery_good_steps = (self._recovery_good_steps + 1) if (recovered and not diverged) else 0
             if self._recovery_good_steps >= self.cfg.recovery_hold_steps:
                 mode_changed, transition_reason = self._set_mode(FlightMode.SHADOW, "fallback_recovered")
 
