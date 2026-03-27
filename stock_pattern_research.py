@@ -37,8 +37,12 @@ DATA_PERIOD_DAYS = 1460           # ~4 years of daily bars
 MIN_PEAK_DIST  = 5               # min trading days between extrema
 PROMINENCE_PCT = 0.05            # min price swing (5 %) to qualify
 
-# Train/val split
+# Phase-1 quick selection split (70/30 for speed)
 TRAIN_RATIO = 0.70
+
+# Walk-forward full backtest
+INITIAL_TRAIN_DAYS = 252         # 1-year initial training window
+STEP_DAYS          = 63          # re-fit every quarter (~63 trading days)
 
 # ─────────────────────────────────────────────────────────────
 # DATA FETCHING  (Yahoo Finance v8 → synthetic fallback)
@@ -475,6 +479,75 @@ def backtest_strategy(close: np.ndarray, preds: np.ndarray,
     }
 
 
+def _make_clf(model_name: str):
+    if model_name == "rf":
+        return RandomForestClassifier(n_estimators=300, max_depth=10,
+                                       class_weight="balanced",
+                                       min_samples_leaf=1,
+                                       random_state=42, n_jobs=-1)
+    elif model_name == "gb":
+        return GradientBoostingClassifier(n_estimators=200, max_depth=4,
+                                           learning_rate=0.08, subsample=0.8,
+                                           random_state=42)
+    return LogisticRegression(class_weight="balanced", max_iter=1000,
+                               random_state=42, C=1.0)
+
+
+def walk_forward_backtest(data: dict, cfg: FeatureConfig, model_name: str,
+                           initial_train: int = INITIAL_TRAIN_DAYS,
+                           step: int = STEP_DAYS) -> dict:
+    """
+    Walk-forward backtest covering the FULL data period:
+
+      ┌──────────────────────────────────────────────┐
+      │ Year 1 (train) │ Q1 │ Q2 │ Q3 │ Q4 │ …      │
+      │    fixed init  │ ← out-of-sample predictions  │
+      └──────────────────────────────────────────────┘
+
+    At each step the training window expands and the model is
+    re-fitted before predicting the next quarter.  Predictions
+    outside the initial window are always out-of-sample.
+    """
+    X, y, close = build_features(data, cfg)
+    n = len(X)
+
+    if initial_train >= n:
+        bnh = float((close[-1] - close[0]) / (close[0] + 1e-8))
+        return {"sharpe": 0.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "n_trades": 0, "bnh_return": bnh,
+                "n_oos_days": 0, "n_windows": 0}
+
+    preds   = np.zeros(n, dtype=np.int32)   # 0 = stay flat during warm-up
+    n_wins  = 0
+    cursor  = initial_train
+
+    while cursor < n:
+        te_end = min(cursor + step, n)
+
+        scaler   = StandardScaler()
+        X_tr_s   = scaler.fit_transform(X[:cursor])
+        X_te_s   = scaler.transform(X[cursor:te_end])
+
+        np.random.seed(42)
+        X_aug, y_aug = _oversample_minorities(X_tr_s, y[:cursor])
+
+        clf = _make_clf(model_name)
+        clf.fit(X_aug, y_aug)
+        preds[cursor:te_end] = clf.predict(X_te_s)
+
+        n_wins += 1
+        cursor += step
+
+    oos_close = close[initial_train:]
+    oos_preds = preds[initial_train:]
+
+    bt = backtest_strategy(oos_close, oos_preds)
+    bt["bnh_return"]  = float((close[-1] - close[initial_train]) / (close[initial_train] + 1e-8))
+    bt["n_oos_days"]  = int(len(oos_close))
+    bt["n_windows"]   = int(n_wins)
+    return bt
+
+
 def train_and_evaluate(X_tr: np.ndarray, y_tr: np.ndarray,
                        X_val: np.ndarray, y_val: np.ndarray,
                        close_val: np.ndarray,
@@ -720,6 +793,40 @@ def print_feature_importance(clf, cfg: FeatureConfig, top_n: int = 10) -> None:
 # RESULTS LOGGING
 # ─────────────────────────────────────────────────────────────
 
+def phase2_transfer_wf(cfg: FeatureConfig, model_name: str, symbols: list[str]) -> list[dict]:
+    """Walk-forward backtest on each test stock — full 4-year coverage."""
+    oos_yr = (DATA_PERIOD_DAYS - INITIAL_TRAIN_DAYS) / 252
+    print(f"\n{'═'*68}")
+    print(f"  PHASE 2 — Walk-Forward Transfer  "
+          f"({oos_yr:.1f}yr OOS per stock)")
+    print(f"  Config: {cfg}  |  Model: {model_name}")
+    print(f"{'═'*68}\n")
+
+    hdr = (f"  {'Symbol':<7}  {'Sharpe':>6}  {'Ret%':>7}  {'DD%':>6}"
+           f"  {'WR%':>5}  {'#T':>3}  {'BnH%':>7}  {'#wins':>5}")
+    print(hdr)
+    print("  " + "─" * 58)
+
+    results: list[dict] = []
+    for sym in symbols:
+        try:
+            data = fetch_stock_data(sym)
+            wf   = walk_forward_backtest(data, cfg, model_name)
+            print(f"  {sym:<7}  {wf['sharpe']:>6.2f}"
+                  f"  {wf['total_return']*100:>6.1f}%"
+                  f"  {wf['max_drawdown']*100:>5.1f}%"
+                  f"  {wf['win_rate']*100:>4.0f}%"
+                  f"  {wf['n_trades']:>3}"
+                  f"  {wf['bnh_return']*100:>6.1f}%"
+                  f"  {wf['n_windows']:>5}")
+            results.append({"symbol": sym, "n": len(data["close"]), **wf})
+        except Exception as e:
+            print(f"  {sym:<7}  ERROR: {e}")
+            results.append({"symbol": sym, "error": str(e)})
+
+    return results
+
+
 def save_results(explore: list[dict], transfer: list[dict], best_cfg: FeatureConfig) -> None:
     # Phase-1 exploration results ranked by Sharpe
     with open("stock_exploration_results.tsv", "w", newline="") as f:
@@ -736,22 +843,23 @@ def save_results(explore: list[dict], transfer: list[dict], best_cfg: FeatureCon
                         r.get("n_trades", 0),
                         f"{r['f1']:.4f}", f"{r['peak_f1']:.4f}", f"{r['valley_f1']:.4f}"])
 
-    # Phase-2 transfer results
+    # Phase-2 walk-forward transfer results
     with open("stock_transfer_results.tsv", "w", newline="") as f:
         w = csv.writer(f, delimiter="\t")
-        w.writerow(["symbol", "n_days",
-                    "sharpe", "total_return%", "max_drawdown%", "win_rate%", "n_trades",
-                    "bnh_return%", "f1"])
+        w.writerow(["symbol", "n_days", "oos_days",
+                    "sharpe", "total_return%", "max_drawdown%", "win_rate%",
+                    "n_trades", "n_refits", "bnh_return%"])
         for r in transfer:
             if "error" not in r:
                 w.writerow([r["symbol"], r["n"],
+                            r.get("n_oos_days", ""),
                             f"{r['sharpe']:.3f}",
                             f"{r['total_return']*100:.2f}",
                             f"{r['max_drawdown']*100:.2f}",
                             f"{r['win_rate']*100:.1f}",
                             r["n_trades"],
-                            f"{r['bnh_return']*100:.2f}",
-                            f"{r['f1']:.4f}"])
+                            r.get("n_windows", ""),
+                            f"{r['bnh_return']*100:.2f}"])
 
     print("\n  Saved → stock_exploration_results.tsv")
     print("  Saved → stock_transfer_results.tsv")
@@ -773,10 +881,10 @@ def main() -> None:
     print(f"\nFetching {TRAIN_SYMBOL} data...")
     tsla = fetch_stock_data(TRAIN_SYMBOL)
 
-    # ── Phase 1 : autonomous exploration ──────────────────────
+    # ── Phase 1 : autonomous exploration (70/30 quick selection) ──
     best_cfg, best_model_name, explore_results = phase1_explore(tsla)
 
-    # Rebuild best model on TSLA split (for feature importance report)
+    # Feature importance (train on 70% split)
     close  = np.array(tsla["close"])
     n      = len(close)
     split  = int(n * TRAIN_RATIO)
@@ -786,12 +894,29 @@ def main() -> None:
     X_tr, y_tr, _        = build_features(tr_d, best_cfg)
     X_vl, y_vl, close_vl = build_features(vl_d, best_cfg)
     np.random.seed(42)
-    best_clf, tsla_metrics = train_and_evaluate(
+    best_clf, _ = train_and_evaluate(
         X_tr, y_tr, X_vl, y_vl, close_vl, model_name=best_model_name)
     print_feature_importance(best_clf, best_cfg)
 
-    # ── Phase 2 : transfer to other stocks ────────────────────
-    transfer_results = phase2_transfer(best_cfg, best_model_name, TEST_SYMBOLS)
+    # ── TSLA walk-forward full 4-year backtest ─────────────────
+    oos_years = (DATA_PERIOD_DAYS - INITIAL_TRAIN_DAYS) / 252
+    print(f"\n{'═'*68}")
+    print(f"  TSLA Walk-Forward Backtest  "
+          f"({INITIAL_TRAIN_DAYS}d init-train → {oos_years:.1f}yr OOS)")
+    print(f"  step={STEP_DAYS}d  |  config={best_cfg}  |  model={best_model_name}")
+    print(f"{'═'*68}")
+    tsla_wf = walk_forward_backtest(tsla, best_cfg, best_model_name)
+    print(f"  Sharpe       : {tsla_wf['sharpe']:.3f}")
+    print(f"  Total return : {tsla_wf['total_return']*100:.1f}%  "
+          f"(vs buy-and-hold {tsla_wf['bnh_return']*100:.1f}%)")
+    print(f"  Max drawdown : {tsla_wf['max_drawdown']*100:.1f}%")
+    print(f"  Win rate     : {tsla_wf['win_rate']*100:.0f}%")
+    print(f"  Trades       : {tsla_wf['n_trades']}  "
+          f"({tsla_wf['n_windows']} re-fits)")
+    print(f"  OOS days     : {tsla_wf['n_oos_days']}")
+
+    # ── Phase 2 : walk-forward transfer to other stocks ───────
+    transfer_results = phase2_transfer_wf(best_cfg, best_model_name, TEST_SYMBOLS)
 
     # ── Save ──────────────────────────────────────────────────
     save_results(explore_results, transfer_results, best_cfg)
@@ -800,27 +925,26 @@ def main() -> None:
     valid = [r for r in transfer_results if "error" not in r]
 
     print(f"\n{'═'*68}")
-    print("  FINAL SUMMARY")
+    print("  FINAL SUMMARY  (Walk-Forward — full 4 years OOS)")
     print(f"{'═'*68}")
     print(f"  Training stock   : {TRAIN_SYMBOL}")
     print(f"  Best feature set : {best_cfg}")
     print(f"  Best model       : {best_model_name}")
     print(f"  Configs tried    : {len(explore_results)}")
     print()
-    print(f"  ── TSLA val-set strategy metrics ──────────────────")
-    print(f"  Sharpe           : {tsla_metrics['sharpe']:.3f}")
-    print(f"  Total return     : {tsla_metrics['total_return']*100:.1f}%")
-    print(f"  Max drawdown     : {tsla_metrics['max_drawdown']*100:.1f}%")
-    print(f"  Win rate         : {tsla_metrics['win_rate']*100:.0f}%")
-    print(f"  Trades           : {tsla_metrics['n_trades']}")
-    print(f"  Buy-and-hold     : {tsla_metrics['bnh_return']*100:.1f}%")
+    print(f"  ── {TRAIN_SYMBOL} 4-year walk-forward ─────────────────────")
+    print(f"  Sharpe           : {tsla_wf['sharpe']:.3f}")
+    print(f"  Total return     : {tsla_wf['total_return']*100:.1f}%")
+    print(f"  Max drawdown     : {tsla_wf['max_drawdown']*100:.1f}%")
+    print(f"  Win rate         : {tsla_wf['win_rate']*100:.0f}%")
+    print(f"  vs Buy-and-hold  : {tsla_wf['bnh_return']*100:.1f}%")
     if valid:
         avg_sh  = sum(r["sharpe"]       for r in valid) / len(valid)
         avg_ret = sum(r["total_return"] for r in valid) / len(valid)
         best_s  = max(valid, key=lambda r: r["sharpe"])
         worst_s = min(valid, key=lambda r: r["sharpe"])
         print()
-        print(f"  ── Transfer-test summary ({len(valid)} stocks) ────────────")
+        print(f"  ── Transfer-test ({len(valid)} stocks, 4yr walk-forward) ──")
         print(f"  Avg Sharpe       : {avg_sh:.3f}")
         print(f"  Avg return       : {avg_ret*100:.1f}%")
         print(f"  Best  stock      : {best_s['symbol']}  (Sharpe={best_s['sharpe']:.2f})")
