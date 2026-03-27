@@ -1,0 +1,272 @@
+// ============================================================
+// AI Peak / Valley Strategy  (Backtestable)
+// ============================================================
+// Derived from autoresearch-mlx experiment:
+//   • AI trained on TSLA to find peak/valley feature signatures
+//   • Best config: returns[5,10,20d] + volume + RSI-14 (Sharpe-ranked)
+//
+// Logic
+//   LONG entry  : composite AI score ≤ –threshold  (valley signal)
+//   LONG exit   : composite AI score ≥ +threshold  (peak signal)
+//   Hard stop   : stop_pct below average entry price
+//   Trailing    : optional trail_pct activated after profit_pct gain
+// ============================================================
+
+//@version=5
+strategy("AI Peak / Valley Strategy",
+         overlay              = true,
+         initial_capital      = 10000,
+         default_qty_type     = strategy.percent_of_equity,
+         default_qty_value    = 100,
+         commission_type      = strategy.commission.percent,
+         commission_value     = 0.1,
+         slippage             = 1,
+         calc_on_every_tick   = false,
+         process_orders_on_close = true)
+
+// ─────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────
+grp_sig = "Signal Settings"
+threshold  = input.int  (6,    "Min AI score to signal (1–9)", minval=1, maxval=9, group=grp_sig)
+rsi_ob     = input.int  (65,   "RSI overbought",  minval=50, maxval=90,  group=grp_sig)
+rsi_os     = input.int  (35,   "RSI oversold",    minval=10, maxval=50,  group=grp_sig)
+vol_mult   = input.float(1.3,  "Volume spike ×",  minval=1.0, step=0.1,  group=grp_sig)
+
+grp_feat = "Feature Windows"
+w_s  = input.int(5,  "Short window",    minval=2,  maxval=20,  group=grp_feat)
+w_m  = input.int(10, "Mid window",      minval=5,  maxval=50,  group=grp_feat)
+w_l  = input.int(20, "Long window",     minval=10, maxval=100, group=grp_feat)
+rlen = input.int(14, "RSI length",      minval=2,  maxval=30,  group=grp_feat)
+vlen = input.int(14, "Volume MA length",minval=5,  maxval=50,  group=grp_feat)
+
+grp_risk = "Risk Management"
+stop_pct    = input.float(5.0,  "Hard stop-loss %",        minval=1.0, maxval=30.0, step=0.5, group=grp_risk)
+trail_pct   = input.float(3.0,  "Trailing stop % (0=off)", minval=0.0, maxval=20.0, step=0.5, group=grp_risk)
+profit_act  = input.float(5.0,  "Activate trail after % gain", minval=0.0, step=0.5, group=grp_risk)
+max_hold    = input.int  (60,   "Max hold bars (0=off)",   minval=0, maxval=500, group=grp_risk)
+
+grp_filt = "Entry Filters"
+use_trend_filter = input.bool(true,  "Only long above EMA", group=grp_filt)
+trend_ema_len    = input.int (50,    "Trend EMA length",    minval=10, group=grp_filt)
+use_vol_filter   = input.bool(true,  "Require volume spike on entry", group=grp_filt)
+
+grp_disp = "Display"
+show_score = input.bool(true, "Show score labels",   group=grp_disp)
+show_table = input.bool(true, "Show feature table",  group=grp_disp)
+show_equity= input.bool(true, "Show equity line",    group=grp_disp)
+
+// ─────────────────────────────────────────────────────────────
+// FEATURES  (mirror of Python experiment's best config)
+// ─────────────────────────────────────────────────────────────
+
+// Price returns
+ret_s = (close - close[w_s]) / close[w_s]
+ret_m = (close - close[w_m]) / close[w_m]
+ret_l = (close - close[w_l]) / close[w_l]
+
+// Range position [0,1]: where is close in its w-bar range
+hi_s = ta.highest(close, w_s); lo_s = ta.lowest(close, w_s)
+hi_m = ta.highest(close, w_m); lo_m = ta.lowest(close, w_m)
+hi_l = ta.highest(close, w_l); lo_l = ta.lowest(close, w_l)
+
+pos_s = (hi_s - lo_s) > 0 ? (close - lo_s) / (hi_s - lo_s) : 0.5
+pos_m = (hi_m - lo_m) > 0 ? (close - lo_m) / (hi_m - lo_m) : 0.5
+pos_l = (hi_l - lo_l) > 0 ? (close - lo_l) / (hi_l - lo_l) : 0.5
+
+// RSI
+rsi_v = ta.rsi(close, rlen)
+
+// Volume spike
+avg_vol  = ta.sma(volume, vlen)
+vol_high = volume > avg_vol * vol_mult
+
+// Volatility Z-score
+vol_s     = (ta.highest(high, w_s) - ta.lowest(low, w_s)) / close
+avg_vol_s = ta.sma(vol_s, 20)
+vol_z     = avg_vol_s > 0 ? (vol_s - avg_vol_s) / avg_vol_s : 0.0
+
+// Trend filter
+trend_ema = ta.ema(close, trend_ema_len)
+
+// ─────────────────────────────────────────────────────────────
+// COMPOSITE SCORE  (−9 … +9)
+// Each sub-score: +1 = peak evidence, –1 = valley evidence
+// ─────────────────────────────────────────────────────────────
+sc_ret_s = ret_s > 0 ? 1 : -1
+sc_ret_m = ret_m > 0 ? 1 : -1
+sc_ret_l = ret_l > 0 ? 1 : -1
+
+sc_pos_s = pos_s > 0.7 ? 1 : pos_s < 0.3 ? -1 : 0
+sc_pos_m = pos_m > 0.7 ? 1 : pos_m < 0.3 ? -1 : 0
+sc_pos_l = pos_l > 0.7 ? 1 : pos_l < 0.3 ? -1 : 0
+
+sc_rsi   = rsi_v > rsi_ob ? 1 : rsi_v < rsi_os ? -1 : 0
+sc_vol   = vol_high ? (ret_s > 0 ? 1 : -1) : 0
+sc_volz  = vol_z > 0.5 ? (ret_s > 0 ? 1 : -1) : 0
+
+composite = sc_ret_s + sc_ret_m + sc_ret_l +
+            sc_pos_s + sc_pos_m + sc_pos_l +
+            sc_rsi   + sc_vol   + sc_volz
+
+// ─────────────────────────────────────────────────────────────
+// SIGNAL DETECTION
+// ─────────────────────────────────────────────────────────────
+peak_zone   = composite >=  threshold
+valley_zone = composite <= -threshold
+
+// Edge trigger (first bar entering the zone)
+peak_trigger   = peak_zone   and not peak_zone[1]
+valley_trigger = valley_zone and not valley_zone[1]
+
+// ─────────────────────────────────────────────────────────────
+// ENTRY FILTERS
+// ─────────────────────────────────────────────────────────────
+trend_ok   = not use_trend_filter or close > trend_ema
+vol_ok     = not use_vol_filter   or vol_high
+
+entry_cond = valley_trigger and trend_ok and vol_ok
+exit_cond  = peak_trigger
+
+// ─────────────────────────────────────────────────────────────
+// RISK MANAGEMENT
+// ─────────────────────────────────────────────────────────────
+var float entry_bar = na
+
+// Max-hold exit
+hold_too_long = max_hold > 0 and
+                strategy.position_size > 0 and
+                not na(entry_bar) and
+                (bar_index - entry_bar) >= max_hold
+
+// ─────────────────────────────────────────────────────────────
+// STRATEGY ORDERS
+// ─────────────────────────────────────────────────────────────
+if entry_cond and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    entry_bar := bar_index
+
+if strategy.position_size > 0
+    avg_price = strategy.position_avg_price
+
+    // Hard stop-loss
+    strategy.exit("Stop", "Long",
+                  stop  = avg_price * (1 - stop_pct / 100))
+
+    // Trailing stop (activates once profit_act % is reached)
+    if trail_pct > 0 and close >= avg_price * (1 + profit_act / 100)
+        strategy.exit("Trail", "Long",
+                      trail_price  = close,
+                      trail_offset = close * trail_pct / 100)
+
+// Signal-based exit
+if exit_cond and strategy.position_size > 0
+    strategy.close("Long", comment="Peak")
+
+// Max-hold time exit
+if hold_too_long
+    strategy.close("Long", comment="MaxHold")
+
+// ─────────────────────────────────────────────────────────────
+// BACKGROUND & LABELS
+// ─────────────────────────────────────────────────────────────
+bgcolor(valley_zone ? color.new(color.green, 90) :
+        peak_zone   ? color.new(color.red,   90) : na)
+
+if show_score
+    if peak_trigger
+        label.new(bar_index, high * 1.002,
+                  text      = "▼ " + str.tostring(composite),
+                  style     = label.style_label_down,
+                  color     = color.new(color.red, 10),
+                  textcolor = color.white, size = size.small)
+    if valley_trigger
+        label.new(bar_index, low * 0.998,
+                  text      = "▲ " + str.tostring(-composite),
+                  style     = label.style_label_up,
+                  color     = color.new(color.green, 10),
+                  textcolor = color.white, size = size.small)
+
+// Trend EMA
+plot(use_trend_filter ? trend_ema : na, "Trend EMA",
+     color=color.new(color.orange, 30), linewidth=2)
+
+// ─────────────────────────────────────────────────────────────
+// SCORE HISTOGRAM  (lower pane)
+// ─────────────────────────────────────────────────────────────
+hline( threshold, "Peak threshold",   color=color.new(color.red,   40), linestyle=hline.style_dashed)
+hline(-threshold, "Valley threshold", color=color.new(color.green, 40), linestyle=hline.style_dashed)
+hline(0, "Zero", color=color.gray, linestyle=hline.style_dotted)
+
+plot(composite, "AI Score",
+     color     = composite >= threshold ? color.red :
+                 composite <= -threshold ? color.green : color.new(color.gray, 40),
+     style     = plot.style_histogram,
+     linewidth = 2)
+
+// ─────────────────────────────────────────────────────────────
+// LIVE FEATURE TABLE
+// ─────────────────────────────────────────────────────────────
+if show_table and barstate.islast
+    var table t = table.new(position.top_right, 3, 13,
+                             border_width=1,
+                             border_color=color.new(color.gray, 50),
+                             bgcolor=color.new(color.black, 72))
+
+    _cell(col, row, txt, clr) =>
+        table.cell(t, col, row, txt, text_color=clr, text_size=size.tiny)
+
+    _cell(0, 0, "Feature",  color.gray)
+    _cell(1, 0, "Value",    color.gray)
+    _cell(2, 0, "Score",    color.gray)
+
+    _row(row, name, val, sc) =>
+        c = sc > 0 ? color.red : sc < 0 ? color.lime : color.silver
+        _cell(0, row, name,                             color.silver)
+        _cell(1, row, str.tostring(val,  "#.##"),       c)
+        _cell(2, row, sc > 0 ? "+1" : sc < 0 ? "−1" : " 0", c)
+
+    _row(1,  "ret_" + str.tostring(w_s) + "d %",  ret_s * 100, sc_ret_s)
+    _row(2,  "ret_" + str.tostring(w_m) + "d %",  ret_m * 100, sc_ret_m)
+    _row(3,  "ret_" + str.tostring(w_l) + "d %",  ret_l * 100, sc_ret_l)
+    _row(4,  "pos_" + str.tostring(w_s) + "d",    pos_s,       sc_pos_s)
+    _row(5,  "pos_" + str.tostring(w_m) + "d",    pos_m,       sc_pos_m)
+    _row(6,  "pos_" + str.tostring(w_l) + "d",    pos_l,       sc_pos_l)
+    _row(7,  "RSI",                                rsi_v,       sc_rsi)
+    _row(8,  "vol_spike ×",                        volume / avg_vol, sc_vol)
+    _row(9,  "vol_z",                              vol_z,       sc_volz)
+
+    table.cell(t, 0, 10, "──────", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 10, "──────", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 2, 10, "──────", text_color=color.gray, text_size=size.tiny)
+
+    tot_c = composite >= threshold ? color.red :
+            composite <= -threshold ? color.lime : color.silver
+    _cell(0, 11, "TOTAL",                               tot_c)
+    _cell(1, 11, "",                                    tot_c)
+    _cell(2, 11, str.tostring(composite) + " / 9",     tot_c)
+
+    // Position status
+    pos_c   = strategy.position_size > 0 ? color.lime : color.gray
+    pos_txt = strategy.position_size > 0
+              ? "IN  (" + str.tostring(math.round(
+                  (close / strategy.position_avg_price - 1) * 100, 2)) + "%)"
+              : "FLAT"
+    _cell(0, 12, "Position",  color.silver)
+    _cell(1, 12, pos_txt,     pos_c)
+    _cell(2, 12, "",          pos_c)
+
+// ─────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────
+alertcondition(entry_cond,
+               title   = "AI Valley — Enter Long",
+               message = "{{ticker}} {{interval}} — AI valley score={{plot_0}}  →  BUY")
+
+alertcondition(exit_cond,
+               title   = "AI Peak — Exit Long",
+               message = "{{ticker}} {{interval}} — AI peak score={{plot_0}}  →  SELL")
+
+alertcondition(entry_cond or exit_cond,
+               title   = "AI Peak / Valley Signal",
+               message = "{{ticker}} {{interval}} — AI signal  score={{plot_0}}")

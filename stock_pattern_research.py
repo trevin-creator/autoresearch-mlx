@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Stock Pattern Research — AI-driven High/Low Point Detection
-===========================================================
-Phase 1 : AI autonomously explores feature combinations on TSLA
-          to find what characterises peaks & valleys.
-Phase 2 : Apply the best discovered method to other US stocks.
+Stock Pattern Research — AI-driven High/Low Point Detection + Backtesting
+==========================================================================
+Phase 1 : AI autonomously explores feature combinations on TSLA,
+          optimising for Sharpe ratio of the derived long-only strategy.
+Phase 2 : Apply the best config to other US stocks and report full
+          strategy metrics (Sharpe, return, max-drawdown, win-rate).
 
-Metric   : F1 score for peak & valley detection
-Framework: autoresearch-mlx (sklearn-based on Linux, MLX on Apple Silicon)
+Framework: autoresearch-mlx (sklearn on Linux, MLX on Apple Silicon)
 """
 
 import csv
@@ -357,8 +357,9 @@ def build_features(data: dict, cfg: FeatureConfig) -> tuple[np.ndarray, np.ndarr
     start = max(lb, 51)                             # ensure indicators are warmed up
     X = np.array([feats[i - lb: i].ravel() for i in range(start, n)], dtype=np.float32)
     y = labels[start:]
+    close_aligned = close[start:]                   # prices aligned with X rows
 
-    return X, y
+    return X, y, close_aligned
 
 
 # ─────────────────────────────────────────────────────────────
@@ -392,28 +393,109 @@ def _oversample_minorities(X: np.ndarray, y: np.ndarray,
     return Xout[perm], yout[perm]
 
 
+# ─────────────────────────────────────────────────────────────
+# BACKTEST ENGINE
+# ─────────────────────────────────────────────────────────────
+
+def backtest_strategy(close: np.ndarray, preds: np.ndarray,
+                      stop_loss_pct: float = 0.05,
+                      commission: float = 0.001) -> dict:
+    """
+    Long-only strategy driven by model predictions:
+      • Enter  LONG  when prediction == -1  (valley / buy signal)
+      • Exit   LONG  when prediction ==  1  (peak   / sell signal)
+      • Hard stop-loss at stop_loss_pct below entry price
+      • commission applied on each buy and sell
+
+    Returns a dict with Sharpe, total_return, max_drawdown,
+    win_rate, n_trades, and buy-and-hold return for reference.
+    """
+    n       = len(close)
+    equity  = np.zeros(n)
+    cash    = 10_000.0
+    shares  = 0.0
+    entry_p = 0.0
+    trades: list[tuple[float, float]] = []   # (entry_price, exit_price)
+
+    equity[0] = cash
+
+    for i in range(1, n):
+        price = close[i]
+
+        # ── stop-loss check ─────────────────────────────────
+        if shares > 0 and price <= entry_p * (1.0 - stop_loss_pct):
+            cash    = shares * price * (1.0 - commission)
+            trades.append((entry_p, price))
+            shares  = 0.0
+            entry_p = 0.0
+
+        # ── signal-driven entry / exit ───────────────────────
+        if shares == 0 and preds[i] == -1:              # valley → buy
+            shares  = cash * (1.0 - commission) / price
+            cash    = 0.0
+            entry_p = price
+        elif shares > 0 and preds[i] == 1:              # peak → sell
+            cash    = shares * price * (1.0 - commission)
+            trades.append((entry_p, price))
+            shares  = 0.0
+            entry_p = 0.0
+
+        equity[i] = cash + shares * price
+
+    # close any open position at period end
+    if shares > 0:
+        cash = shares * close[-1] * (1.0 - commission)
+        trades.append((entry_p, close[-1]))
+        equity[-1] = cash
+
+    # ── performance metrics ──────────────────────────────────
+    daily_ret = np.diff(equity) / (equity[:-1] + 1e-8)
+    if daily_ret.std() > 1e-8:
+        sharpe = float(daily_ret.mean() / daily_ret.std() * np.sqrt(252))
+    else:
+        sharpe = 0.0
+
+    running_max  = np.maximum.accumulate(equity)
+    drawdowns    = (running_max - equity) / (running_max + 1e-8)
+    max_drawdown = float(drawdowns.max())
+
+    total_return = float((equity[-1] - 10_000.0) / 10_000.0)
+    bnh_return   = float((close[-1] - close[0]) / (close[0] + 1e-8))
+
+    wins     = sum(1 for ep, ex in trades if ex > ep)
+    win_rate = float(wins / max(len(trades), 1))
+
+    return {
+        "sharpe":       sharpe,
+        "total_return": total_return,
+        "max_drawdown": max_drawdown,
+        "win_rate":     win_rate,
+        "n_trades":     len(trades),
+        "bnh_return":   bnh_return,
+    }
+
+
 def train_and_evaluate(X_tr: np.ndarray, y_tr: np.ndarray,
                        X_val: np.ndarray, y_val: np.ndarray,
-                       model_name: str = "rf") -> tuple[object, float, float, float]:
+                       close_val: np.ndarray,
+                       model_name: str = "rf") -> tuple[object, dict]:
     """
-    Train a classifier and return (model, avg_f1, peak_f1, valley_f1).
+    Train a classifier and return (model, metrics_dict).
 
-    The classifier sees three classes:
-        label  1 → peak
-        label  0 → neutral
-        label -1 → valley
+    metrics_dict keys:
+        f1, peak_f1, valley_f1,
+        sharpe, total_return, max_drawdown, win_rate, n_trades, bnh_return
     """
     scaler  = StandardScaler()
     X_tr_s  = scaler.fit_transform(X_tr)
     X_val_s = scaler.transform(X_val)
 
-    # Oversample peaks/valleys so each is ≥20 % of training set
     X_tr_s, y_tr = _oversample_minorities(X_tr_s, y_tr)
 
     if model_name == "rf":
         clf = RandomForestClassifier(
             n_estimators=300, max_depth=10,
-            class_weight="balanced",        # auto-compute per-class weights
+            class_weight="balanced",
             min_samples_leaf=1,
             random_state=42, n_jobs=-1
         )
@@ -423,7 +505,7 @@ def train_and_evaluate(X_tr: np.ndarray, y_tr: np.ndarray,
             learning_rate=0.08, subsample=0.8,
             random_state=42
         )
-    else:  # "lr"
+    else:
         clf = LogisticRegression(
             class_weight="balanced", max_iter=1000,
             random_state=42, C=1.0
@@ -432,19 +514,24 @@ def train_and_evaluate(X_tr: np.ndarray, y_tr: np.ndarray,
     clf.fit(X_tr_s, y_tr)
     preds = clf.predict(X_val_s)
 
+    # ── classification metrics ───────────────────────────────
     def _f1(cls: int) -> float:
-        tp  = ((y_val == cls) & (preds == cls)).sum()
+        tp   = ((y_val == cls) & (preds == cls)).sum()
         prec = tp / ((preds == cls).sum() + 1e-8)
         rec  = tp / ((y_val == cls).sum() + 1e-8)
         return float(2 * prec * rec / (prec + rec + 1e-8))
 
-    peak_f1   = _f1(1)
-    valley_f1 = _f1(-1)
-    avg_f1    = (peak_f1 + valley_f1) / 2.0
+    # ── backtest metrics ─────────────────────────────────────
+    bt = backtest_strategy(close_val, preds)
 
-    # Bundle scaler with clf for reuse
     clf._scaler = scaler
-    return clf, avg_f1, peak_f1, valley_f1
+    metrics = {
+        "f1":          (_f1(1) + _f1(-1)) / 2.0,
+        "peak_f1":     _f1(1),
+        "valley_f1":   _f1(-1),
+        **bt,
+    }
+    return clf, metrics
 
 
 # ─────────────────────────────────────────────────────────────
@@ -453,8 +540,9 @@ def train_and_evaluate(X_tr: np.ndarray, y_tr: np.ndarray,
 
 def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
     """
-    Autonomously try every (feature-config, model) combination on the training
-    stock.  Returns the best FeatureConfig, the best model name, and all results.
+    Autonomously try every (feature-config × model) combination on TSLA.
+    Primary ranking metric: Sharpe ratio of the derived long-only strategy.
+    Returns (best_cfg, best_model_name, all_results).
     """
     sym   = data["symbol"]
     close = np.array(data["close"])
@@ -463,32 +551,33 @@ def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
 
     peaks, valleys = find_peaks_valleys(close.tolist())
 
-    print(f"\n{'═'*68}")
-    print(f"  PHASE 1 — Autonomous Feature Exploration on {sym}")
-    print(f"{'═'*68}")
-    print(f"  Data   : {n} days  |  Peaks : {len(peaks)}  |  Valleys : {len(valleys)}")
-    print(f"  Train  : {split} days  |  Val : {n - split} days\n")
+    print(f"\n{'═'*80}")
+    print(f"  PHASE 1 — Autonomous Exploration on {sym}  (metric = Sharpe ratio)")
+    print(f"{'═'*80}")
+    print(f"  Data : {n} days  |  Peaks : {len(peaks)}  |  Valleys : {len(valleys)}")
+    print(f"  Train: {split} days  |  Val: {n - split} days\n")
 
     tr_data = {k: v[:split] for k, v in data.items() if isinstance(v, list)}
     vl_data = {k: v[split:] for k, v in data.items() if isinstance(v, list)}
     tr_data["symbol"] = vl_data["symbol"] = sym
 
-    results: list[dict] = []
-    best_f1         = -1.0
-    best_cfg        = None
-    best_model_name = "lr"
+    results: list[dict]  = []
+    best_sharpe          = -999.0
+    best_cfg             = None
+    best_model_name      = "lr"
 
     MODEL_NAMES = ["rf", "gb", "lr"]
 
-    header = f"  {'#':>3}  {'Feature Config':<46}  {'Model':>4}  {'F1':>6}  {'Peak':>6}  {'Val':>6}"
-    print(header)
-    print("  " + "─" * 66)
+    hdr = (f"  {'#':>3}  {'Feature Config':<42}  {'Mdl':>3}"
+           f"  {'Sharpe':>6}  {'Ret%':>6}  {'DD%':>6}  {'WR%':>5}  {'#T':>3}  {'F1':>5}")
+    print(hdr)
+    print("  " + "─" * 82)
 
     exp_num = 0
     for cfg in SEARCH_SPACE:
         try:
-            X_tr, y_tr = build_features(tr_data, cfg)
-            X_vl, y_vl = build_features(vl_data, cfg)
+            X_tr, y_tr, _        = build_features(tr_data, cfg)
+            X_vl, y_vl, close_vl = build_features(vl_data, cfg)
 
             if len(X_tr) < 50 or len(X_vl) < 15:
                 continue
@@ -497,34 +586,40 @@ def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
 
         except Exception as e:
             exp_num += 1
-            print(f"  {exp_num:>3}  {str(cfg):<46}  BUILD ERROR: {e}")
+            print(f"  {exp_num:>3}  {str(cfg):<42}  BUILD ERROR: {e}")
             continue
 
         for mname in MODEL_NAMES:
             exp_num += 1
             try:
-                np.random.seed(42)          # reproducible oversampling
-                clf, f1, pf1, vf1 = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, model_name=mname)
-                marker = " ←best" if f1 > best_f1 else ""
-                print(f"  {exp_num:>3}  {str(cfg):<46}  {mname:>4}  {f1:.4f}  {pf1:.4f}  {vf1:.4f}{marker}")
+                np.random.seed(42)
+                clf, m = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, close_vl, mname)
 
-                results.append({"cfg": cfg, "model": mname,
-                                 "f1": f1, "peak_f1": pf1, "valley_f1": vf1})
+                sh  = m["sharpe"];       ret = m["total_return"] * 100
+                dd  = m["max_drawdown"] * 100; wr = m["win_rate"] * 100
+                nt  = m["n_trades"];     f1  = m["f1"]
 
-                if f1 > best_f1:
-                    best_f1         = f1
+                marker = " ←best" if m["sharpe"] > best_sharpe else ""
+                print(f"  {exp_num:>3}  {str(cfg):<42}  {mname:>3}"
+                      f"  {sh:>6.2f}  {ret:>5.1f}%  {dd:>5.1f}%"
+                      f"  {wr:>4.0f}%  {nt:>3}  {f1:.3f}{marker}")
+
+                results.append({"cfg": cfg, "model": mname, **m})
+
+                if m["sharpe"] > best_sharpe:
+                    best_sharpe     = m["sharpe"]
                     best_cfg        = cfg
                     best_model_name = mname
 
             except Exception as e:
-                print(f"  {exp_num:>3}  {str(cfg):<46}  {mname:>4}  ERROR: {e}")
+                print(f"  {exp_num:>3}  {str(cfg):<42}  {mname:>3}  ERROR: {e}")
 
     if best_cfg is None:
-        raise RuntimeError("All experiments failed — check data or config.")
+        raise RuntimeError("All experiments failed.")
 
-    print(f"\n  ✓ Best config     : {best_cfg}")
-    print(f"  ✓ Best model      : {best_model_name}")
-    print(f"  ✓ Best F1 on val  : {best_f1:.4f}")
+    print(f"\n  ✓ Best config : {best_cfg}")
+    print(f"  ✓ Best model  : {best_model_name}")
+    print(f"  ✓ Best Sharpe : {best_sharpe:.3f}")
     return best_cfg, best_model_name, results
 
 
@@ -533,13 +628,13 @@ def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
 # ─────────────────────────────────────────────────────────────
 
 def phase2_transfer(cfg: FeatureConfig, model_name: str, symbols: list[str]) -> list[dict]:
-    print(f"\n{'═'*68}")
+    print(f"\n{'═'*80}")
     print(f"  PHASE 2 — Transfer Test  |  Config: {cfg}  |  Model: {model_name}")
-    print(f"{'═'*68}\n")
-    header = (f"  {'Symbol':<8}  {'Days':>5}  {'Peaks':>6}  {'Vals':>6}"
-              f"  {'F1':>6}  {'Peak-F1':>7}  {'Val-F1':>6}  Status")
-    print(header)
-    print("  " + "─" * 66)
+    print(f"{'═'*80}\n")
+    hdr = (f"  {'Symbol':<7}  {'Sharpe':>6}  {'Ret%':>7}  {'DD%':>6}"
+           f"  {'WR%':>5}  {'#T':>3}  {'BnH%':>7}  {'F1':>5}")
+    print(hdr)
+    print("  " + "─" * 60)
 
     results: list[dict] = []
     for sym in symbols:
@@ -552,24 +647,24 @@ def phase2_transfer(cfg: FeatureConfig, model_name: str, symbols: list[str]) -> 
             vl_data = {k: v[split:] for k, v in data.items() if isinstance(v, list)}
             tr_data["symbol"] = vl_data["symbol"] = sym
 
-            close = np.array(data["close"])
-            peaks, valleys = find_peaks_valleys(close.tolist())
-
-            X_tr, y_tr = build_features(tr_data, cfg)
-            X_vl, y_vl = build_features(vl_data, cfg)
+            X_tr, y_tr, _        = build_features(tr_data, cfg)
+            X_vl, y_vl, close_vl = build_features(vl_data, cfg)
 
             np.random.seed(42)
-            clf, f1, pf1, vf1 = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, model_name=model_name)
+            clf, m = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, close_vl, model_name)
 
-            print(f"  {sym:<8}  {n:>5}  {len(peaks):>6}  {len(valleys):>6}"
-                  f"  {f1:.4f}  {pf1:>7.4f}  {vf1:.4f}  OK")
-            results.append({"symbol": sym, "n": n,
-                             "peaks": len(peaks), "valleys": len(valleys),
-                             "f1": f1, "peak_f1": pf1, "valley_f1": vf1})
+            print(f"  {sym:<7}  {m['sharpe']:>6.2f}"
+                  f"  {m['total_return']*100:>6.1f}%"
+                  f"  {m['max_drawdown']*100:>5.1f}%"
+                  f"  {m['win_rate']*100:>4.0f}%"
+                  f"  {m['n_trades']:>3}"
+                  f"  {m['bnh_return']*100:>6.1f}%"
+                  f"  {m['f1']:.3f}")
+
+            results.append({"symbol": sym, "n": n, **m})
 
         except Exception as e:
-            print(f"  {sym:<8}  {'':>5}  {'':>6}  {'':>6}"
-                  f"  {'':>6}  {'':>7}  {'':>6}  ERROR: {e}")
+            print(f"  {sym:<7}  ERROR: {e}")
             results.append({"symbol": sym, "error": str(e)})
 
     return results
@@ -626,20 +721,37 @@ def print_feature_importance(clf, cfg: FeatureConfig, top_n: int = 10) -> None:
 # ─────────────────────────────────────────────────────────────
 
 def save_results(explore: list[dict], transfer: list[dict], best_cfg: FeatureConfig) -> None:
+    # Phase-1 exploration results ranked by Sharpe
     with open("stock_exploration_results.tsv", "w", newline="") as f:
         w = csv.writer(f, delimiter="\t")
-        w.writerow(["rank", "config", "model", "f1", "peak_f1", "valley_f1"])
-        for i, r in enumerate(sorted(explore, key=lambda x: -x["f1"]), 1):
+        w.writerow(["rank", "config", "model",
+                    "sharpe", "total_return", "max_drawdown", "win_rate", "n_trades",
+                    "f1", "peak_f1", "valley_f1"])
+        for i, r in enumerate(sorted(explore, key=lambda x: -x.get("sharpe", -999)), 1):
             w.writerow([i, str(r["cfg"]), r["model"],
+                        f"{r.get('sharpe',0):.3f}",
+                        f"{r.get('total_return',0)*100:.2f}",
+                        f"{r.get('max_drawdown',0)*100:.2f}",
+                        f"{r.get('win_rate',0)*100:.1f}",
+                        r.get("n_trades", 0),
                         f"{r['f1']:.4f}", f"{r['peak_f1']:.4f}", f"{r['valley_f1']:.4f}"])
 
+    # Phase-2 transfer results
     with open("stock_transfer_results.tsv", "w", newline="") as f:
         w = csv.writer(f, delimiter="\t")
-        w.writerow(["symbol", "n_days", "peaks", "valleys", "f1", "peak_f1", "valley_f1"])
+        w.writerow(["symbol", "n_days",
+                    "sharpe", "total_return%", "max_drawdown%", "win_rate%", "n_trades",
+                    "bnh_return%", "f1"])
         for r in transfer:
             if "error" not in r:
-                w.writerow([r["symbol"], r["n"], r["peaks"], r["valleys"],
-                            f"{r['f1']:.4f}", f"{r['peak_f1']:.4f}", f"{r['valley_f1']:.4f}"])
+                w.writerow([r["symbol"], r["n"],
+                            f"{r['sharpe']:.3f}",
+                            f"{r['total_return']*100:.2f}",
+                            f"{r['max_drawdown']*100:.2f}",
+                            f"{r['win_rate']*100:.1f}",
+                            r["n_trades"],
+                            f"{r['bnh_return']*100:.2f}",
+                            f"{r['f1']:.4f}"])
 
     print("\n  Saved → stock_exploration_results.tsv")
     print("  Saved → stock_transfer_results.tsv")
@@ -664,17 +776,18 @@ def main() -> None:
     # ── Phase 1 : autonomous exploration ──────────────────────
     best_cfg, best_model_name, explore_results = phase1_explore(tsla)
 
-    # Rebuild best model on full TSLA train split for feature importance
+    # Rebuild best model on TSLA split (for feature importance report)
     close  = np.array(tsla["close"])
     n      = len(close)
     split  = int(n * TRAIN_RATIO)
     tr_d   = {k: v[:split] for k, v in tsla.items() if isinstance(v, list)}
     vl_d   = {k: v[split:] for k, v in tsla.items() if isinstance(v, list)}
     tr_d["symbol"] = vl_d["symbol"] = TRAIN_SYMBOL
-    X_tr, y_tr = build_features(tr_d, best_cfg)
-    X_vl, y_vl = build_features(vl_d, best_cfg)
+    X_tr, y_tr, _        = build_features(tr_d, best_cfg)
+    X_vl, y_vl, close_vl = build_features(vl_d, best_cfg)
     np.random.seed(42)
-    best_clf, _, _, _ = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, model_name=best_model_name)
+    best_clf, tsla_metrics = train_and_evaluate(
+        X_tr, y_tr, X_vl, y_vl, close_vl, model_name=best_model_name)
     print_feature_importance(best_clf, best_cfg)
 
     # ── Phase 2 : transfer to other stocks ────────────────────
@@ -693,13 +806,25 @@ def main() -> None:
     print(f"  Best feature set : {best_cfg}")
     print(f"  Best model       : {best_model_name}")
     print(f"  Configs tried    : {len(explore_results)}")
+    print()
+    print(f"  ── TSLA val-set strategy metrics ──────────────────")
+    print(f"  Sharpe           : {tsla_metrics['sharpe']:.3f}")
+    print(f"  Total return     : {tsla_metrics['total_return']*100:.1f}%")
+    print(f"  Max drawdown     : {tsla_metrics['max_drawdown']*100:.1f}%")
+    print(f"  Win rate         : {tsla_metrics['win_rate']*100:.0f}%")
+    print(f"  Trades           : {tsla_metrics['n_trades']}")
+    print(f"  Buy-and-hold     : {tsla_metrics['bnh_return']*100:.1f}%")
     if valid:
-        avg_f1  = sum(r["f1"] for r in valid) / len(valid)
-        best_s  = max(valid, key=lambda r: r["f1"])
-        worst_s = min(valid, key=lambda r: r["f1"])
-        print(f"  Avg F1 on test   : {avg_f1:.4f}")
-        print(f"  Best  test stock : {best_s['symbol']} (F1={best_s['f1']:.4f})")
-        print(f"  Worst test stock : {worst_s['symbol']} (F1={worst_s['f1']:.4f})")
+        avg_sh  = sum(r["sharpe"]       for r in valid) / len(valid)
+        avg_ret = sum(r["total_return"] for r in valid) / len(valid)
+        best_s  = max(valid, key=lambda r: r["sharpe"])
+        worst_s = min(valid, key=lambda r: r["sharpe"])
+        print()
+        print(f"  ── Transfer-test summary ({len(valid)} stocks) ────────────")
+        print(f"  Avg Sharpe       : {avg_sh:.3f}")
+        print(f"  Avg return       : {avg_ret*100:.1f}%")
+        print(f"  Best  stock      : {best_s['symbol']}  (Sharpe={best_s['sharpe']:.2f})")
+        print(f"  Worst stock      : {worst_s['symbol']}  (Sharpe={worst_s['sharpe']:.2f})")
 
     elapsed = time.time() - t0
     print(f"  Total time       : {elapsed:.1f}s")
