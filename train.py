@@ -110,7 +110,7 @@ class MLP(nn.Module):
 
     def __call__(self, x):
         x = self.c_fc(x)
-        x = mx.maximum(x, 0) ** 2
+        x = nn.silu(x)
         return self.c_proj(x)
 
 

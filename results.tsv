@@ -1,3 +1,4 @@
 commit	val_bpb	memory_gb	status	description
 e099b9d	2.200617	21.2	keep	baseline
 401c17c	1.578134	21.2	keep	halve total batch size to 2^15
+dbfcd5a	1.359470	21.2	keep	switch MLP activation from squared ReLU to SiLU
