@@ -56,7 +56,7 @@ TRANSFER_PERSIST = 2             # persistence for single-config WF; ensemble us
 
 # Phase-2 per-stock gate: skip trading if best quick_eval w_score < this
 # Prevents negative-Sharpe contributions from stocks where no config works
-MIN_TRANSFER_SCORE = 0.30        # w_score threshold (Sharpe × trade-count penalty)
+MIN_TRANSFER_SCORE = 0.20        # w_score threshold (Sharpe × trade-count penalty)
 # Phase-2 ensemble: use top-K per-stock configs with majority vote
 TRANSFER_ENSEMBLE_K = 3          # number of configs per stock for voting
 TRANSFER_MAJORITY   = 3          # unanimous: all K configs must agree to fire
@@ -1195,34 +1195,47 @@ def print_feature_importance(clf, cfg: FeatureConfig, top_n: int = 10) -> None:
 def _quick_eval_cfg(data: dict, cfg: FeatureConfig, model_name: str,
                     train_ratio: float = TRAIN_RATIO) -> float:
     """
-    Evaluate a (cfg, model) on a quick 70/30 split of stock data.
+    Evaluate a (cfg, model) on TWO temporal splits and return the minimum
+    (conservative) score.  Using two splits guards against the single-split
+    70/30 being accidentally lucky for a stock that won't generalise.
+
+    Split A: first 60% train, last 40% test
+    Split B: first train_ratio train, rest test  (default 70/30)
+
     Returns weighted score = Sharpe × min(1, n_trades / MIN_TRADES_P1).
     Returns -999 on error or too-few samples.
     """
     close = np.array(data["close"])
     n     = len(close)
-    split = int(n * train_ratio)
-    tr_d  = {k: v[:split] for k, v in data.items() if isinstance(v, list)}
-    vl_d  = {k: v[split:] for k, v in data.items() if isinstance(v, list)}
-    tr_d["symbol"] = vl_d["symbol"] = data["symbol"]
-    try:
-        X_tr, y_tr, _        = build_features(tr_d, cfg)
-        X_vl, y_vl, close_vl = build_features(vl_d, cfg)
-        if len(X_tr) < 50 or len(X_vl) < 15:
+
+    split_scores: list[float] = []
+    for sr in (0.60, train_ratio):
+        split = int(n * sr)
+        tr_d = {k: v[:split] for k, v in data.items() if isinstance(v, list)}
+        vl_d = {k: v[split:] for k, v in data.items() if isinstance(v, list)}
+        tr_d["symbol"] = vl_d["symbol"] = data["symbol"]
+        try:
+            X_tr, y_tr, _        = build_features(tr_d, cfg)
+            X_vl, y_vl, close_vl = build_features(vl_d, cfg)
+            if len(X_tr) < 50 or len(X_vl) < 15:
+                return -999.0
+            if (y_tr == 1).sum() < 3 or (y_tr == -1).sum() < 3:
+                return -999.0
+            np.random.seed(42)
+            # Use TRANSFER_CONF (not cfg.conf_threshold) so the quick-eval
+            # threshold matches what will be applied in the final walk-forward.
+            _, m = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, close_vl,
+                                      model_name, max(cfg.conf_threshold, TRANSFER_CONF))
+            # Cap score at 0 when win rate is below floor (model is consistently wrong)
+            if m["win_rate"] < MIN_WIN_RATE_QUICK_EVAL and m["n_trades"] >= 3:
+                split_scores.append(0.0)
+            else:
+                split_scores.append(m["sharpe"] * min(1.0, m["n_trades"] / MIN_TRADES_P1))
+        except Exception:
             return -999.0
-        if (y_tr == 1).sum() < 3 or (y_tr == -1).sum() < 3:
-            return -999.0
-        np.random.seed(42)
-        # Use TRANSFER_CONF (not cfg.conf_threshold) so the quick-eval
-        # threshold matches what will be applied in the final walk-forward.
-        _, m = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, close_vl,
-                                  model_name, max(cfg.conf_threshold, TRANSFER_CONF))
-        # Cap score at 0 when win rate is below floor (model is consistently wrong)
-        if m["win_rate"] < MIN_WIN_RATE_QUICK_EVAL and m["n_trades"] >= 3:
-            return 0.0
-        return m["sharpe"] * min(1.0, m["n_trades"] / MIN_TRADES_P1)
-    except Exception:
-        return -999.0
+
+    # Conservative: take the minimum across both splits
+    return min(split_scores)
 
 
 def phase2_transfer_wf(cfg: FeatureConfig, model_name: str,
@@ -1309,7 +1322,7 @@ def phase2_transfer_wf(cfg: FeatureConfig, model_name: str,
                 wf = walk_forward_ensemble(data, top_sym_cfgs,
                                            conf_threshold=TRANSFER_CONF,
                                            majority=TRANSFER_MAJORITY,
-                                           signal_persist=TRANSFER_PERSIST)
+                                           signal_persist=1)
                 cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
             elif len(top_sym_cfgs) >= 1:
                 # Fewer than K valid configs — fall back to single best
