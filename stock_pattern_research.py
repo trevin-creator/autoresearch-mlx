@@ -41,7 +41,7 @@ PROMINENCE_PCT = 0.05            # min price swing (5 %) to qualify
 TRAIN_RATIO = 0.70
 
 # Walk-forward full backtest
-INITIAL_TRAIN_DAYS = 504         # 2-year initial training window (more stable early models)
+INITIAL_TRAIN_DAYS = 252         # 1-year initial training window
 STEP_DAYS          = 63          # re-fit every quarter (~63 trading days)
 
 # Phase-1 scoring: penalise configs with too few trades
@@ -548,7 +548,7 @@ def backtest_strategy(close: np.ndarray, preds: np.ndarray,
 
         # ── stop-loss check ─────────────────────────────────
         if shares > 0 and price <= stop_p:
-            cash    = shares * price * (1.0 - commission)
+            cash   += shares * price * (1.0 - commission)
             trades.append((entry_p, price))
             shares  = 0.0
             entry_p = 0.0
@@ -583,7 +583,7 @@ def backtest_strategy(close: np.ndarray, preds: np.ndarray,
 
     # close any open position at period end
     if shares > 0:
-        cash = shares * close[-1] * (1.0 - commission)
+        cash += shares * close[-1] * (1.0 - commission)
         trades.append((entry_p, close[-1]))
         equity[-1] = cash
 
@@ -1010,22 +1010,35 @@ def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
     print(f"  ✓ Best model  : {best_model_name}")
     print(f"  ✓ Best Sharpe : {best_sharpe:.3f}")
 
-    # Build top-K ensemble list (unique configs by w_score, excluding 0-trade results)
+    # Build diversity-based ensemble: one best config per feature family
+    # Families: macd, rsi, stoch, bb, atr, base
+    # This prevents all 3 slots from being filled by correlated MACD configs
+    def _family(cfg: FeatureConfig) -> str:
+        if cfg.use_macd:  return "macd"
+        if cfg.use_stoch: return "stoch"
+        if cfg.use_rsi:   return "rsi"
+        if cfg.use_bb:    return "bb"
+        if cfg.use_atr:   return "atr"
+        return "base"
+
     top_k = 3
-    seen  = set()
+    seen_keys:     set[str] = set()
+    seen_families: set[str] = set()
     top_cfgs_models: list[tuple] = []
     for r in sorted(results, key=lambda x: -x.get("w_score", -999)):
         if r.get("n_trades", 0) < 5:
             continue
         key = (str(r["cfg"]), r["model"])
-        if key not in seen:
-            seen.add(key)
+        fam = _family(r["cfg"])
+        if key not in seen_keys and fam not in seen_families:
+            seen_keys.add(key)
+            seen_families.add(fam)
             top_cfgs_models.append((r["cfg"], r["model"]))
         if len(top_cfgs_models) >= top_k:
             break
-    print(f"  ✓ Ensemble    : {top_k} configs for Phase-2 voting")
+    print(f"  ✓ Ensemble    : {top_k} diverse configs for Phase-2 voting (2/3 majority)")
     for i, (c, m) in enumerate(top_cfgs_models, 1):
-        print(f"      {i}. {c}  [{m}]")
+        print(f"      {i}. [{_family(c)}]  {c}  [{m}]")
 
     return best_cfg, best_model_name, results, top_cfgs_models
 
@@ -1323,9 +1336,37 @@ def main() -> None:
           f"({tsla_wf['n_windows']} re-fits)")
     print(f"  OOS days     : {tsla_wf['n_oos_days']}")
 
-    # ── Phase 2 : walk-forward transfer to other stocks ───────
-    # Use single best config from Phase 1 (most stable transfer)
-    transfer_results = phase2_transfer_wf(best_cfg, best_model_name, TEST_SYMBOLS)
+    # ── Phase 2 : walk-forward transfer — diversity ensemble ──
+    # Use top-3 diverse configs (one per feature family), majority=2
+    oos_yr2 = (DATA_PERIOD_DAYS - INITIAL_TRAIN_DAYS) / 252
+    print(f"\n{'═'*68}")
+    print(f"  PHASE 2 — Walk-Forward Ensemble Transfer  ({oos_yr2:.1f}yr OOS per stock)")
+    print(f"  Ensemble: 3 diverse configs, 2/3 majority vote")
+    print(f"  TRANSFER_CONF={TRANSFER_CONF}")
+    print(f"{'═'*68}\n")
+    hdr2 = (f"  {'Symbol':<7}  {'Sharpe':>6}  {'Ret%':>7}  {'DD%':>6}"
+            f"  {'WR%':>5}  {'#T':>3}  {'BnH%':>7}  {'#wins':>5}")
+    print(hdr2)
+    print("  " + "─" * 56)
+    transfer_results: list[dict] = []
+    for sym in TEST_SYMBOLS:
+        try:
+            sym_data = fetch_stock_data(sym)
+            wf = walk_forward_ensemble(sym_data, top_cfgs_models,
+                                       conf_threshold=TRANSFER_CONF,
+                                       majority=2)
+            print(f"  {sym:<7}  {wf['sharpe']:>6.2f}"
+                  f"  {wf['total_return']*100:>6.1f}%"
+                  f"  {wf['max_drawdown']*100:>5.1f}%"
+                  f"  {wf['win_rate']*100:>4.0f}%"
+                  f"  {wf['n_trades']:>3}"
+                  f"  {wf['bnh_return']*100:>6.1f}%"
+                  f"  {wf['n_windows']:>5}")
+            transfer_results.append({"symbol": sym, "n": len(sym_data["close"]),
+                                     "cfg": "ensemble", **wf})
+        except Exception as e:
+            print(f"  {sym:<7}  ERROR: {e}")
+            transfer_results.append({"symbol": sym, "error": str(e)})
 
     # ── Save ──────────────────────────────────────────────────
     save_results(explore_results, transfer_results, best_cfg)
