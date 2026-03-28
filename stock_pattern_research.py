@@ -41,7 +41,7 @@ PROMINENCE_PCT = 0.05            # min price swing (5 %) to qualify
 TRAIN_RATIO = 0.70
 
 # Walk-forward full backtest
-INITIAL_TRAIN_DAYS = 252         # 1-year initial training window
+INITIAL_TRAIN_DAYS = 504         # 2-year initial training window (more stable early models)
 STEP_DAYS          = 63          # re-fit every quarter (~63 trading days)
 
 # Phase-1 scoring: penalise configs with too few trades
@@ -566,9 +566,10 @@ def backtest_strategy(close: np.ndarray, preds: np.ndarray,
             shares  = invest * (1.0 - commission) / price
             cash   -= invest
             entry_p = price
-            # ATR-based or fixed stop
+            # ATR-based stop, capped at stop_loss_pct to protect against large drawdowns
             if atr is not None and atr[i] > 0:
-                stop_p = price - atr_stop_mult * atr[i] * price
+                atr_pct = min(atr_stop_mult * atr[i], stop_loss_pct)
+                stop_p = price * (1.0 - atr_pct)
             else:
                 stop_p = price * (1.0 - stop_loss_pct)
         elif shares > 0 and preds[i] == 1:              # peak → sell
@@ -1322,10 +1323,9 @@ def main() -> None:
           f"({tsla_wf['n_windows']} re-fits)")
     print(f"  OOS days     : {tsla_wf['n_oos_days']}")
 
-    # ── Phase 2 : per-stock adaptive config + walk-forward ───
-    # Each test stock picks its own best config from the Phase-1 candidate pool
-    transfer_results = phase2_transfer_wf(best_cfg, best_model_name, TEST_SYMBOLS,
-                                          explore_results=explore_results)
+    # ── Phase 2 : walk-forward transfer to other stocks ───────
+    # Use single best config from Phase 1 (most stable transfer)
+    transfer_results = phase2_transfer_wf(best_cfg, best_model_name, TEST_SYMBOLS)
 
     # ── Save ──────────────────────────────────────────────────
     save_results(explore_results, transfer_results, best_cfg)
