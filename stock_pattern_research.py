@@ -1131,48 +1131,102 @@ def print_feature_importance(clf, cfg: FeatureConfig, top_n: int = 10) -> None:
 # RESULTS LOGGING
 # ─────────────────────────────────────────────────────────────
 
+def _quick_eval_cfg(data: dict, cfg: FeatureConfig, model_name: str,
+                    train_ratio: float = TRAIN_RATIO) -> float:
+    """
+    Evaluate a (cfg, model) on a quick 70/30 split of stock data.
+    Returns weighted score = Sharpe × min(1, n_trades / MIN_TRADES_P1).
+    Returns -999 on error or too-few samples.
+    """
+    close = np.array(data["close"])
+    n     = len(close)
+    split = int(n * train_ratio)
+    tr_d  = {k: v[:split] for k, v in data.items() if isinstance(v, list)}
+    vl_d  = {k: v[split:] for k, v in data.items() if isinstance(v, list)}
+    tr_d["symbol"] = vl_d["symbol"] = data["symbol"]
+    try:
+        X_tr, y_tr, _        = build_features(tr_d, cfg)
+        X_vl, y_vl, close_vl = build_features(vl_d, cfg)
+        if len(X_tr) < 50 or len(X_vl) < 15:
+            return -999.0
+        if (y_tr == 1).sum() < 3 or (y_tr == -1).sum() < 3:
+            return -999.0
+        np.random.seed(42)
+        _, m = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, close_vl,
+                                  model_name, cfg.conf_threshold)
+        return m["sharpe"] * min(1.0, m["n_trades"] / MIN_TRADES_P1)
+    except Exception:
+        return -999.0
+
+
 def phase2_transfer_wf(cfg: FeatureConfig, model_name: str,
                        symbols: list[str],
+                       explore_results: list[dict] | None = None,
                        top_cfgs_models: list[tuple] | None = None) -> list[dict]:
     """
     Walk-forward backtest on each test stock — full 4-year coverage.
-    If top_cfgs_models is supplied, uses an ensemble majority vote
-    across those configs instead of a single config.
+
+    Per-stock adaptive config selection (when explore_results is given):
+      For each test stock a quick 70/30 validation selects the best config
+      from the top-N Phase-1 candidates, so each stock gets its own
+      tailored feature set rather than always inheriting TSLA's best.
     """
     oos_yr = (DATA_PERIOD_DAYS - INITIAL_TRAIN_DAYS) / 252
-    use_ensemble = top_cfgs_models is not None and len(top_cfgs_models) > 1
+    adapt  = explore_results is not None and len(explore_results) > 0
     print(f"\n{'═'*68}")
-    if use_ensemble:
-        print(f"  PHASE 2 — Walk-Forward Transfer  Ensemble ({len(top_cfgs_models)}-config vote)")
+    if adapt:
+        print(f"  PHASE 2 — Walk-Forward Transfer  (per-stock adaptive config)")
     else:
         print(f"  PHASE 2 — Walk-Forward Transfer  ({oos_yr:.1f}yr OOS per stock)")
-    print(f"  Best config: {cfg}  |  Model: {model_name}")
+    print(f"  Fallback config: {cfg}  |  Model: {model_name}")
     print(f"  TRANSFER_CONF={TRANSFER_CONF}")
     print(f"{'═'*68}\n")
 
+    # Build top-20 candidates from Phase 1 (unique by config+model, ≥5 trades)
+    cand_pool: list[tuple[FeatureConfig, str]] = []
+    if adapt:
+        seen: set[str] = set()
+        for r in sorted(explore_results, key=lambda x: -x.get("w_score", -999)):
+            if r.get("n_trades", 0) < 5:
+                continue
+            key = (str(r["cfg"]), r["model"])
+            if key not in seen:
+                seen.add(key)
+                cand_pool.append((r["cfg"], r["model"]))
+            if len(cand_pool) >= 20:
+                break
+
     hdr = (f"  {'Symbol':<7}  {'Sharpe':>6}  {'Ret%':>7}  {'DD%':>6}"
-           f"  {'WR%':>5}  {'#T':>3}  {'BnH%':>7}  {'#wins':>5}")
+           f"  {'WR%':>5}  {'#T':>3}  {'BnH%':>7}  {'#wins':>5}  {'cfg':}")
     print(hdr)
-    print("  " + "─" * 58)
+    print("  " + "─" * 70)
 
     results: list[dict] = []
     for sym in symbols:
         try:
             data = fetch_stock_data(sym)
-            if use_ensemble:
-                wf = walk_forward_ensemble(data, top_cfgs_models)
-            else:
-                wf = walk_forward_backtest(data, cfg, model_name,
-                                           conf_threshold=TRANSFER_CONF,
-                                           signal_persist=TRANSFER_PERSIST)
+
+            # ── Per-stock config selection ─────────────────────
+            best_sym_cfg, best_sym_model = cfg, model_name
+            if adapt and cand_pool:
+                scores = [(c, m, _quick_eval_cfg(data, c, m))
+                          for c, m in cand_pool]
+                scores.sort(key=lambda x: -x[2])
+                if scores[0][2] > -999:
+                    best_sym_cfg, best_sym_model, _ = scores[0]
+
+            wf = walk_forward_backtest(data, best_sym_cfg, best_sym_model,
+                                       conf_threshold=TRANSFER_CONF,
+                                       signal_persist=TRANSFER_PERSIST)
             print(f"  {sym:<7}  {wf['sharpe']:>6.2f}"
                   f"  {wf['total_return']*100:>6.1f}%"
                   f"  {wf['max_drawdown']*100:>5.1f}%"
                   f"  {wf['win_rate']*100:>4.0f}%"
                   f"  {wf['n_trades']:>3}"
                   f"  {wf['bnh_return']*100:>6.1f}%"
-                  f"  {wf['n_windows']:>5}")
-            results.append({"symbol": sym, "n": len(data["close"]), **wf})
+                  f"  {wf['n_windows']:>5}  [{best_sym_model}]{best_sym_cfg}")
+            results.append({"symbol": sym, "n": len(data["close"]),
+                             "cfg": str(best_sym_cfg), **wf})
         except Exception as e:
             print(f"  {sym:<7}  ERROR: {e}")
             results.append({"symbol": sym, "error": str(e)})
@@ -1268,10 +1322,10 @@ def main() -> None:
           f"({tsla_wf['n_windows']} re-fits)")
     print(f"  OOS days     : {tsla_wf['n_oos_days']}")
 
-    # ── Phase 2 : walk-forward transfer to other stocks ───────
-    # Use ensemble (majority vote of top-3 configs) for more robust signals
+    # ── Phase 2 : per-stock adaptive config + walk-forward ───
+    # Each test stock picks its own best config from the Phase-1 candidate pool
     transfer_results = phase2_transfer_wf(best_cfg, best_model_name, TEST_SYMBOLS,
-                                          top_cfgs_models=top_cfgs_models)
+                                          explore_results=explore_results)
 
     # ── Save ──────────────────────────────────────────────────
     save_results(explore_results, transfer_results, best_cfg)
