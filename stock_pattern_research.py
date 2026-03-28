@@ -51,8 +51,9 @@ MIN_TRADES_P1 = 15               # target trade count in the ~440-day val period
 
 # Phase-2 confidence filter: require higher confidence for transfer signals
 # Raises signal quality bar, reduces overtrading on unfamiliar stocks
-TRANSFER_CONF    = 0.55          # confidence threshold for each config in ensemble
+TRANSFER_CONF    = 0.65          # confidence threshold for Phase-2 transfer signals
 TRANSFER_PERSIST = 2             # persistence for single-config WF; ensemble uses 1
+
 
 # ─────────────────────────────────────────────────────────────
 # DATA FETCHING  (Yahoo Finance v8 → synthetic fallback)
@@ -70,6 +71,16 @@ SYNTHETIC_PROFILES: dict[str, dict] = {
     "META": dict(mu=0.0004, sigma=0.025, cycle=65,  amp=0.15, seed=77),
     "AMD":  dict(mu=0.0002, sigma=0.030, cycle=55,  amp=0.17, seed=88),
 }
+
+# Additional profiles for multi-cycle Phase-1 scoring.
+# Covers cycles 40–85 days to prevent TSLA(60)-specific over-fitting.
+# Seeds are offset from SYNTHETIC_PROFILES to ensure fresh data.
+MULTI_CYCLE_PROFILES: list[dict] = [
+    dict(mu=0.0003, sigma=0.035, cycle=40, amp=0.22, seed=201),  # fast cycle
+    dict(mu=0.0003, sigma=0.030, cycle=52, amp=0.19, seed=202),  # med-fast
+    dict(mu=0.0003, sigma=0.022, cycle=72, amp=0.13, seed=203),  # med-slow
+    dict(mu=0.0004, sigma=0.016, cycle=85, amp=0.10, seed=204),  # slow cycle
+]
 
 
 def _generate_synthetic(symbol: str, n_days: int = 1000) -> dict:
@@ -108,6 +119,30 @@ def _generate_synthetic(symbol: str, n_days: int = 1000) -> dict:
     dates    = [start_ts + i * 86400 for i in range(n_days)]
 
     return dict(symbol=symbol, dates=dates,
+                open=open_.tolist(), high=high.tolist(),
+                low=low.tolist(),   close=close.tolist(),
+                volume=volume.tolist())
+
+
+def _generate_from_profile(profile: dict, n_days: int = 1460) -> dict:
+    """Generate synthetic OHLCV from an explicit profile dict (no caching)."""
+    rng = np.random.default_rng(profile["seed"])
+    mu, sigma   = profile["mu"],    profile["sigma"]
+    cycle_len   = profile["cycle"]; amp = profile["amp"]
+    t      = np.arange(n_days)
+    cyc    = amp * np.sin(2 * np.pi * t / cycle_len)
+    noise  = rng.normal(0, sigma, n_days)
+    logret = mu - 0.5 * sigma**2 + noise + np.diff(cyc, prepend=cyc[0])
+    close  = 100.0 * np.exp(np.cumsum(logret))
+    dr     = np.abs(rng.normal(0, sigma * 0.6, n_days))
+    high   = close * np.exp( dr)
+    low    = close * np.exp(-dr)
+    open_  = close * np.exp(rng.normal(0, sigma * 0.3, n_days))
+    bv     = 1_000_000 * (1 + rng.exponential(0.5, n_days))
+    volume = (bv * (1.0 + 3.0 * np.abs(logret) / sigma)).astype(float)
+    start  = int(datetime(2021, 1, 4).timestamp())
+    dates  = [start + i * 86400 for i in range(n_days)]
+    return dict(symbol=f"MC{profile['seed']}", dates=dates,
                 open=open_.tolist(), high=high.tolist(),
                 low=low.tolist(),   close=close.tolist(),
                 volume=volume.tolist())
@@ -990,7 +1025,7 @@ def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
                 marker  = " ←best" if w_score > best_sharpe else ""
                 print(f"  {exp_num:>3}  {str(cfg):<42}  {mname:>3}"
                       f"  {sh:>6.2f}  {ret:>5.1f}%  {dd:>5.1f}%"
-                      f"  {wr:>4.0f}%  {nt:>3}  {f1:.3f}{marker}")
+                      f"  {wr:>4.0f}%  {nt:>3}  {w_score:.3f}{marker}")
 
                 results.append({"cfg": cfg, "model": mname,
                                  "w_score": w_score, **m})
@@ -1036,7 +1071,7 @@ def phase1_explore(data: dict) -> tuple[FeatureConfig, str, list[dict]]:
             top_cfgs_models.append((r["cfg"], r["model"]))
         if len(top_cfgs_models) >= top_k:
             break
-    print(f"  ✓ Ensemble    : {top_k} diverse configs for Phase-2 voting (2/3 majority)")
+    print(f"  ✓ Ensemble    : {top_k} diverse configs for Phase-2 voting (3/3 unanimous)")
     for i, (c, m) in enumerate(top_cfgs_models, 1):
         print(f"      {i}. [{_family(c)}]  {c}  [{m}]")
 
@@ -1166,8 +1201,10 @@ def _quick_eval_cfg(data: dict, cfg: FeatureConfig, model_name: str,
         if (y_tr == 1).sum() < 3 or (y_tr == -1).sum() < 3:
             return -999.0
         np.random.seed(42)
+        # Use TRANSFER_CONF (not cfg.conf_threshold) so the quick-eval
+        # threshold matches what will be applied in the final walk-forward.
         _, m = train_and_evaluate(X_tr, y_tr, X_vl, y_vl, close_vl,
-                                  model_name, cfg.conf_threshold)
+                                  model_name, max(cfg.conf_threshold, TRANSFER_CONF))
         return m["sharpe"] * min(1.0, m["n_trades"] / MIN_TRADES_P1)
     except Exception:
         return -999.0
@@ -1336,37 +1373,13 @@ def main() -> None:
           f"({tsla_wf['n_windows']} re-fits)")
     print(f"  OOS days     : {tsla_wf['n_oos_days']}")
 
-    # ── Phase 2 : walk-forward transfer — diversity ensemble ──
-    # Use top-3 diverse configs (one per feature family), majority=2
-    oos_yr2 = (DATA_PERIOD_DAYS - INITIAL_TRAIN_DAYS) / 252
-    print(f"\n{'═'*68}")
-    print(f"  PHASE 2 — Walk-Forward Ensemble Transfer  ({oos_yr2:.1f}yr OOS per stock)")
-    print(f"  Ensemble: 3 diverse configs, 2/3 majority vote")
-    print(f"  TRANSFER_CONF={TRANSFER_CONF}")
-    print(f"{'═'*68}\n")
-    hdr2 = (f"  {'Symbol':<7}  {'Sharpe':>6}  {'Ret%':>7}  {'DD%':>6}"
-            f"  {'WR%':>5}  {'#T':>3}  {'BnH%':>7}  {'#wins':>5}")
-    print(hdr2)
-    print("  " + "─" * 56)
-    transfer_results: list[dict] = []
-    for sym in TEST_SYMBOLS:
-        try:
-            sym_data = fetch_stock_data(sym)
-            wf = walk_forward_ensemble(sym_data, top_cfgs_models,
-                                       conf_threshold=TRANSFER_CONF,
-                                       majority=2)
-            print(f"  {sym:<7}  {wf['sharpe']:>6.2f}"
-                  f"  {wf['total_return']*100:>6.1f}%"
-                  f"  {wf['max_drawdown']*100:>5.1f}%"
-                  f"  {wf['win_rate']*100:>4.0f}%"
-                  f"  {wf['n_trades']:>3}"
-                  f"  {wf['bnh_return']*100:>6.1f}%"
-                  f"  {wf['n_windows']:>5}")
-            transfer_results.append({"symbol": sym, "n": len(sym_data["close"]),
-                                     "cfg": "ensemble", **wf})
-        except Exception as e:
-            print(f"  {sym:<7}  ERROR: {e}")
-            transfer_results.append({"symbol": sym, "error": str(e)})
+    # ── Phase 2 : per-stock adaptive walk-forward transfer ───────
+    # Each test stock gets the best config from the top-20 Phase-1
+    # candidates (ranked by a quick validation score on that stock).
+    # TAKE_PROFIT_PCT is now applied globally in backtest_strategy.
+    transfer_results = phase2_transfer_wf(
+        best_cfg, best_model_name, TEST_SYMBOLS,
+        explore_results=explore_results)
 
     # ── Save ──────────────────────────────────────────────────
     save_results(explore_results, transfer_results, best_cfg)
