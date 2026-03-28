@@ -4,3 +4,4 @@ e099b9d	2.200617	21.2	keep	baseline
 dbfcd5a	1.359470	21.2	keep	switch MLP activation from squared ReLU to SiLU
 eeb6ac0	1.340550	21.2	keep	reduce aspect ratio from 64 to 48 (narrower model)
 ffa7797	1.308185	21.2	keep	lower matrix LR to 0.02
+ef889b5	1.305418	21.2	keep	increase embedding LR to 1.0
