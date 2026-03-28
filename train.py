@@ -356,7 +356,7 @@ class AdamW:
 # ---------------------------------------------------------------------------
 
 # Model architecture
-ASPECT_RATIO = 64
+ASPECT_RATIO = 48
 HEAD_DIM = 128
 WINDOW_PATTERN = "SSSL"
 
