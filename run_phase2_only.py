@@ -166,11 +166,27 @@ for sym in TEST_SYMBOLS:
             sym_conf = TRANSFER_CONF + 0.05
 
         if len(top_sym_cfgs) >= TRANSFER_ENSEMBLE_K:
-            wf = walk_forward_ensemble(data, top_sym_cfgs,
-                                       conf_threshold=sym_conf,
-                                       majority=TRANSFER_MAJORITY,
-                                       signal_persist=2)
-            cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"
+            # First pass with persist=1 to gauge trade count
+            wf1 = walk_forward_ensemble(data, top_sym_cfgs,
+                                        conf_threshold=sym_conf,
+                                        majority=TRANSFER_MAJORITY,
+                                        signal_persist=1)
+            # For moderate-trade stocks (slow cycles like MSFT), try persist=2:
+            # narrow-band 20 < n ≤ 32 avoids GOOGL (too few) and NVDA (too many)
+            if 20 < wf1['n_trades'] <= 32:
+                wf2 = walk_forward_ensemble(data, top_sym_cfgs,
+                                            conf_threshold=sym_conf,
+                                            majority=TRANSFER_MAJORITY,
+                                            signal_persist=2)
+                if wf2['sharpe'] > wf1['sharpe']:
+                    wf = wf2
+                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"
+                else:
+                    wf = wf1
+                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
+            else:
+                wf = wf1
+                cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
         elif len(top_sym_cfgs) >= 1:
             wf = walk_forward_backtest(data, best_sym_cfg, best_sym_model,
                                        conf_threshold=sym_conf,
