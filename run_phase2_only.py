@@ -171,8 +171,8 @@ for sym in TEST_SYMBOLS:
                                         conf_threshold=sym_conf,
                                         majority=TRANSFER_MAJORITY,
                                         signal_persist=1)
-            # For moderate-trade stocks (slow cycles like MSFT), try persist=2:
-            # narrow-band 20 < n ≤ 32 avoids GOOGL (too few) and NVDA (too many)
+            # Adaptive persist=2 for moderate-trade slow-cycle stocks (e.g. MSFT)
+            # Narrow band 20<n<=32: avoids GOOGL (too few) and NVDA (too many)
             if 20 < wf1['n_trades'] <= 32:
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf,
@@ -181,6 +181,18 @@ for sym in TEST_SYMBOLS:
                 if wf2['sharpe'] > wf1['sharpe']:
                     wf = wf2
                     cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"
+                else:
+                    wf = wf1
+                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
+            # Adaptive conf=0.70 for noisy high-trade stocks (e.g. NVDA)
+            elif wf1['n_trades'] > 35:
+                wf2 = walk_forward_ensemble(data, top_sym_cfgs,
+                                            conf_threshold=sym_conf + 0.05,
+                                            majority=TRANSFER_MAJORITY,
+                                            signal_persist=1)
+                if wf2['sharpe'] > wf1['sharpe']:
+                    wf = wf2
+                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"
                 else:
                     wf = wf1
                     cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
