@@ -171,8 +171,8 @@ for sym in TEST_SYMBOLS:
                                         conf_threshold=sym_conf,
                                         majority=TRANSFER_MAJORITY,
                                         signal_persist=1)
-            # Adaptive persist/conf for moderate-trade stocks (e.g. MSFT, AAPL, AMD)
-            # Band 15<=n<=32: try 4 variants (persist x conf combinations), pick best
+            # Adaptive persist/conf/majority for moderate-trade stocks
+            # Band 15<=n<=32: 6-variant grid (persist x conf x majority), pick best
             if 15 <= wf1['n_trades'] <= 32:
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf,
@@ -186,10 +186,21 @@ for sym in TEST_SYMBOLS:
                                             conf_threshold=sym_conf + 0.05,
                                             majority=TRANSFER_MAJORITY,
                                             signal_persist=2)
-                candidates = [(wf1, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
-                              (wf2, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"),
-                              (wf3c, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
-                              (wf4, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2c70")]
+                wf5m = walk_forward_ensemble(data, top_sym_cfgs,
+                                             conf_threshold=sym_conf,
+                                             majority=max(1, TRANSFER_MAJORITY - 1),
+                                             signal_persist=1)
+                wf6mc = walk_forward_ensemble(data, top_sym_cfgs,
+                                              conf_threshold=sym_conf + 0.05,
+                                              majority=max(1, TRANSFER_MAJORITY - 1),
+                                              signal_persist=1)
+                maj2 = max(1, TRANSFER_MAJORITY - 1)
+                candidates = [(wf1,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
+                              (wf2,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"),
+                              (wf3c,  f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
+                              (wf4,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2c70"),
+                              (wf5m,  f"ens{TRANSFER_ENSEMBLE_K}x{maj2}"),
+                              (wf6mc, f"ens{TRANSFER_ENSEMBLE_K}x{maj2}c70")]
                 wf, cfg_tag = max(candidates, key=lambda x: x[0]['sharpe'])
             # Adaptive conf for noisy high-trade stocks (e.g. NVDA)
             elif wf1['n_trades'] > 35:
