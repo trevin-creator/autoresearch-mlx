@@ -172,7 +172,7 @@ for sym in TEST_SYMBOLS:
                                         majority=TRANSFER_MAJORITY,
                                         signal_persist=1)
             # Adaptive persist/conf for moderate-trade stocks (e.g. MSFT, AAPL, AMD)
-            # Band 15<=n<=32: try persist=2 and/or conf+0.05, pick best of 3
+            # Band 15<=n<=32: try 4 variants (persist x conf combinations), pick best
             if 15 <= wf1['n_trades'] <= 32:
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf,
@@ -182,9 +182,14 @@ for sym in TEST_SYMBOLS:
                                              conf_threshold=sym_conf + 0.05,
                                              majority=TRANSFER_MAJORITY,
                                              signal_persist=1)
+                wf4 = walk_forward_ensemble(data, top_sym_cfgs,
+                                            conf_threshold=sym_conf + 0.05,
+                                            majority=TRANSFER_MAJORITY,
+                                            signal_persist=2)
                 candidates = [(wf1, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
                               (wf2, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"),
-                              (wf3c, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70")]
+                              (wf3c, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
+                              (wf4, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2c70")]
                 wf, cfg_tag = max(candidates, key=lambda x: x[0]['sharpe'])
             # Adaptive conf for noisy high-trade stocks (e.g. NVDA)
             elif wf1['n_trades'] > 35:
