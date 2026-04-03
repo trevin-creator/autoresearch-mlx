@@ -171,31 +171,40 @@ for sym in TEST_SYMBOLS:
                                         conf_threshold=sym_conf,
                                         majority=TRANSFER_MAJORITY,
                                         signal_persist=1)
-            # Adaptive persist=2 for moderate-trade slow-cycle stocks (e.g. MSFT)
-            # Narrow band 20<n<=32: avoids GOOGL (too few) and NVDA (too many)
-            if 20 < wf1['n_trades'] <= 32:
+            # Adaptive persist/conf for moderate-trade stocks (e.g. MSFT, AAPL, AMD)
+            # Band 15<=n<=32: try persist=2 and/or conf+0.05, pick best of 3
+            if 15 <= wf1['n_trades'] <= 32:
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf,
                                             majority=TRANSFER_MAJORITY,
                                             signal_persist=2)
-                if wf2['sharpe'] > wf1['sharpe']:
-                    wf = wf2
-                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"
-                else:
-                    wf = wf1
-                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
-            # Adaptive conf=0.70 for noisy high-trade stocks (e.g. NVDA)
+                wf3c = walk_forward_ensemble(data, top_sym_cfgs,
+                                             conf_threshold=sym_conf + 0.05,
+                                             majority=TRANSFER_MAJORITY,
+                                             signal_persist=1)
+                candidates = [(wf1, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
+                              (wf2, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"),
+                              (wf3c, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70")]
+                wf, cfg_tag = max(candidates, key=lambda x: x[0]['sharpe'])
+            # Adaptive conf for noisy high-trade stocks (e.g. NVDA)
             elif wf1['n_trades'] > 35:
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf + 0.05,
                                             majority=TRANSFER_MAJORITY,
                                             signal_persist=1)
-                if wf2['sharpe'] > wf1['sharpe']:
-                    wf = wf2
-                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"
-                else:
-                    wf = wf1
-                    cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
+                wf3 = walk_forward_ensemble(data, top_sym_cfgs,
+                                            conf_threshold=sym_conf + 0.10,
+                                            majority=TRANSFER_MAJORITY,
+                                            signal_persist=1)
+                wf4 = walk_forward_ensemble(data, top_sym_cfgs,
+                                            conf_threshold=sym_conf + 0.15,
+                                            majority=TRANSFER_MAJORITY,
+                                            signal_persist=1)
+                candidates = [(wf1, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
+                              (wf2, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
+                              (wf3, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c75"),
+                              (wf4, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80")]
+                wf, cfg_tag = max(candidates, key=lambda x: x[0]['sharpe'])
             else:
                 wf = wf1
                 cfg_tag = f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"
