@@ -143,6 +143,7 @@ for sym in TEST_SYMBOLS:
         top_sym_cfgs: list[tuple] = []
         best_sym_cfg, best_sym_model = best_cfg, best_model
 
+        top4_cfgs: list[tuple] = []
         if best_s >= MIN_TRANSFER_SCORE:
             best_sym_cfg, best_sym_model = best_c, best_m
             seen_fam: set[str] = set()
@@ -159,6 +160,15 @@ for sym in TEST_SYMBOLS:
                     top_sym_cfgs.append((c, m))
                 if len(top_sym_cfgs) >= TRANSFER_ENSEMBLE_K:
                     break
+            # Build K=4 ensemble: K=3 family-diverse + next best non-duplicate
+            top4_cfgs = list(top_sym_cfgs)
+            for c, m, s in scores:
+                if s <= -999:
+                    continue
+                if (c, m) not in top_sym_cfgs:
+                    top4_cfgs.append((c, m))
+                if len(top4_cfgs) >= 4:
+                    break
 
         # Dynamic confidence: tighten threshold for uncertain transfers
         sym_conf = TRANSFER_CONF
@@ -172,8 +182,9 @@ for sym in TEST_SYMBOLS:
                                         majority=TRANSFER_MAJORITY,
                                         signal_persist=1)
             # Adaptive persist/conf/majority for moderate-trade stocks
-            # Band 15<=n<=32: 6-variant grid (persist x conf x majority), pick best
+            # Band 15<=n<=32: 8-variant grid (persist x conf x majority), pick best
             if 15 <= wf1['n_trades'] <= 32:
+                maj2 = max(1, TRANSFER_MAJORITY - 1)
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf,
                                             majority=TRANSFER_MAJORITY,
@@ -188,22 +199,49 @@ for sym in TEST_SYMBOLS:
                                             signal_persist=2)
                 wf5m = walk_forward_ensemble(data, top_sym_cfgs,
                                              conf_threshold=sym_conf,
-                                             majority=max(1, TRANSFER_MAJORITY - 1),
+                                             majority=maj2,
                                              signal_persist=1)
                 wf6mc = walk_forward_ensemble(data, top_sym_cfgs,
                                               conf_threshold=sym_conf + 0.05,
-                                              majority=max(1, TRANSFER_MAJORITY - 1),
+                                              majority=maj2,
                                               signal_persist=1)
-                maj2 = max(1, TRANSFER_MAJORITY - 1)
-                candidates = [(wf1,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
-                              (wf2,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"),
-                              (wf3c,  f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
-                              (wf4,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2c70"),
-                              (wf5m,  f"ens{TRANSFER_ENSEMBLE_K}x{maj2}"),
-                              (wf6mc, f"ens{TRANSFER_ENSEMBLE_K}x{maj2}c70")]
+                wf7m2 = walk_forward_ensemble(data, top_sym_cfgs,
+                                              conf_threshold=sym_conf,
+                                              majority=maj2,
+                                              signal_persist=2)
+                wf8m2c = walk_forward_ensemble(data, top_sym_cfgs,
+                                               conf_threshold=sym_conf + 0.05,
+                                               majority=maj2,
+                                               signal_persist=2)
+                candidates = [(wf1,    f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
+                              (wf2,    f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2"),
+                              (wf3c,   f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
+                              (wf4,    f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}p2c70"),
+                              (wf5m,   f"ens{TRANSFER_ENSEMBLE_K}x{maj2}"),
+                              (wf6mc,  f"ens{TRANSFER_ENSEMBLE_K}x{maj2}c70"),
+                              (wf7m2,  f"ens{TRANSFER_ENSEMBLE_K}x{maj2}p2"),
+                              (wf8m2c, f"ens{TRANSFER_ENSEMBLE_K}x{maj2}p2c70")]
+                # K=4 ensemble variants (one extra config beyond family-diverse K=3)
+                if len(top4_cfgs) >= 4:
+                    wf_k4m3 = walk_forward_ensemble(data, top4_cfgs,
+                                                    conf_threshold=sym_conf,
+                                                    majority=TRANSFER_MAJORITY,
+                                                    signal_persist=1)
+                    wf_k4m2 = walk_forward_ensemble(data, top4_cfgs,
+                                                    conf_threshold=sym_conf,
+                                                    majority=maj2,
+                                                    signal_persist=1)
+                    wf_k4m3c = walk_forward_ensemble(data, top4_cfgs,
+                                                     conf_threshold=sym_conf + 0.05,
+                                                     majority=TRANSFER_MAJORITY,
+                                                     signal_persist=1)
+                    candidates += [(wf_k4m3,  "ens4x3"),
+                                   (wf_k4m2,  "ens4x2"),
+                                   (wf_k4m3c, "ens4x3c70")]
                 wf, cfg_tag = max(candidates, key=lambda x: x[0]['sharpe'])
-            # Adaptive conf for noisy high-trade stocks (e.g. NVDA)
+            # Adaptive conf/majority/persist for noisy high-trade stocks (e.g. NVDA)
             elif wf1['n_trades'] > 35:
+                maj2 = max(1, TRANSFER_MAJORITY - 1)
                 wf2 = walk_forward_ensemble(data, top_sym_cfgs,
                                             conf_threshold=sym_conf + 0.05,
                                             majority=TRANSFER_MAJORITY,
@@ -216,10 +254,21 @@ for sym in TEST_SYMBOLS:
                                             conf_threshold=sym_conf + 0.15,
                                             majority=TRANSFER_MAJORITY,
                                             signal_persist=1)
-                candidates = [(wf1, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
-                              (wf2, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
-                              (wf3, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c75"),
-                              (wf4, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80")]
+                # persist=2 variants: conf × persist grid for high-overtrade stocks
+                wf5p = walk_forward_ensemble(data, top_sym_cfgs,
+                                             conf_threshold=sym_conf + 0.10,
+                                             majority=TRANSFER_MAJORITY,
+                                             signal_persist=2)
+                wf6p = walk_forward_ensemble(data, top_sym_cfgs,
+                                             conf_threshold=sym_conf + 0.15,
+                                             majority=TRANSFER_MAJORITY,
+                                             signal_persist=2)
+                candidates = [(wf1,  f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}"),
+                              (wf2,  f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c70"),
+                              (wf3,  f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c75"),
+                              (wf4,  f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80"),
+                              (wf5p, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c75p2"),
+                              (wf6p, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80p2")]
                 wf, cfg_tag = max(candidates, key=lambda x: x[0]['sharpe'])
             else:
                 wf = wf1
