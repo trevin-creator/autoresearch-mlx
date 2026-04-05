@@ -238,6 +238,17 @@ for sym in TEST_SYMBOLS:
                               (wf6mc,  f"ens{TRANSFER_ENSEMBLE_K}x{maj2}c70"),
                               (wf7m2,  f"ens{TRANSFER_ENSEMBLE_K}x{maj2}p2"),
                               (wf8m2c, f"ens{TRANSFER_ENSEMBLE_K}x{maj2}p2c70")]
+                # Higher-conf K=3/K=4 for over-traded 15-32 stocks (c75, c80)
+                wf_c75 = walk_forward_ensemble(data, top_sym_cfgs,
+                                              conf_threshold=sym_conf + 0.10,
+                                              majority=TRANSFER_MAJORITY,
+                                              signal_persist=1)
+                wf_c80 = walk_forward_ensemble(data, top_sym_cfgs,
+                                              conf_threshold=sym_conf + 0.15,
+                                              majority=TRANSFER_MAJORITY,
+                                              signal_persist=1)
+                candidates += [(wf_c75, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c75"),
+                               (wf_c80, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80")]
                 # K=4 ensemble variants (one extra config beyond family-diverse K=3)
                 if len(top4_cfgs) >= 4:
                     wf_k4m3 = walk_forward_ensemble(data, top4_cfgs,
