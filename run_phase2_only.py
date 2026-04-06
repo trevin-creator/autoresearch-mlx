@@ -263,9 +263,20 @@ for sym in TEST_SYMBOLS:
                                                      conf_threshold=sym_conf + 0.05,
                                                      majority=TRANSFER_MAJORITY,
                                                      signal_persist=1)
-                    candidates += [(wf_k4m3,  "ens4x3"),
-                                   (wf_k4m2,  "ens4x2"),
-                                   (wf_k4m3c, "ens4x3c70")]
+                    # unanimous K=4 at base conf and c70
+                    wf_k4m4 = walk_forward_ensemble(data, top4_cfgs,
+                                                    conf_threshold=sym_conf,
+                                                    majority=4,
+                                                    signal_persist=1)
+                    wf_k4m4c70 = walk_forward_ensemble(data, top4_cfgs,
+                                                       conf_threshold=sym_conf + 0.05,
+                                                       majority=4,
+                                                       signal_persist=1)
+                    candidates += [(wf_k4m3,    "ens4x3"),
+                                   (wf_k4m2,    "ens4x2"),
+                                   (wf_k4m3c,   "ens4x3c70"),
+                                   (wf_k4m4,    "ens4x4"),
+                                   (wf_k4m4c70, "ens4x4c70")]
                 # K=5 ensemble variant (majority=4 = 80% agreement, most selective)
                 if len(top5_cfgs) >= 5:
                     wf_k5m4 = walk_forward_ensemble(data, top5_cfgs,
