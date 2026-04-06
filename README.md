@@ -66,6 +66,9 @@ The Mac Mini result matters because it did not just rediscover the same exact re
 - **Roughly 6-7 minutes per experiment.** Expect 5 minutes of training plus compile and eval overhead.
 - **MFU reporting is placeholder.** There is no Apple Silicon equivalent to the H100 FLOPs reference used upstream.
 
+## SciML_Direction
+[moatasim-KT](https://github.com/microsoft/RustTraining) - designed to encourage AI agents to explore advanced SciML topics specifically on MLX Apple Silicon
+
 ## Acknowledgments
 
 - [Andrej Karpathy](https://github.com/karpathy) - autoresearch and nanochat
