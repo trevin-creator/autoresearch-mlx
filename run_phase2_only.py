@@ -70,20 +70,6 @@ TOP20_RAW = [
     ("w[5, 10, 20]|lb14|rsi|atr|c0.55",    "lr", 2.100),
     ("w[5, 10, 20]|lb14|rsi",              "lr", 2.022),
     ("w[5, 10, 20]|lb20|atr|tr",           "lr", 2.000),
-    # ── Slow-cycle configs (for MSFT cycle=90d) ─────────────────
-    ("w[10, 20, 50]|lb30|macd|bb",         "lr", 1.900),
-    ("w[10, 20, 50]|lb40|macd|bb",         "lr", 1.850),
-    ("w[10, 20, 50]|lb30|macd",            "lr", 1.800),
-    ("w[10, 20, 50]|lb30|rsi|macd",        "lr", 1.750),
-    ("w[10, 20, 50]|lb40|macd|tr",         "lr", 1.700),
-    # ── META-cycle configs (cycle≈65d, sigma=0.025, amp=0.15) ────
-    ("w[5, 10, 20]|lb60|macd|bb",          "lr", 1.650),
-    ("w[5, 10, 20]|lb60|rsi|macd",         "lr", 1.620),
-    ("w[5, 10, 20]|lb65|macd|bb",          "lr", 1.600),
-    ("w[5, 10, 20]|lb60|macd",             "lr", 1.580),
-    ("w[5, 10, 20]|lb65|rsi|macd",         "lr", 1.560),
-    ("w[10, 20, 50]|lb60|macd|bb",         "lr", 1.540),
-    ("w[10, 20, 50]|lb60|rsi|macd",        "lr", 1.520),
 ]
 
 explore_results = [
@@ -247,59 +233,38 @@ for sym in TEST_SYMBOLS:
                                               conf_threshold=sym_conf + 0.15,
                                               majority=TRANSFER_MAJORITY,
                                               signal_persist=1)
+                wf_c85 = walk_forward_ensemble(data, top_sym_cfgs,
+                                              conf_threshold=sym_conf + 0.20,
+                                              majority=TRANSFER_MAJORITY,
+                                              signal_persist=1)
+                wf_c90 = walk_forward_ensemble(data, top_sym_cfgs,
+                                              conf_threshold=sym_conf + 0.25,
+                                              majority=TRANSFER_MAJORITY,
+                                              signal_persist=1)
                 candidates += [(wf_c75, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c75"),
-                               (wf_c80, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80")]
+                               (wf_c80, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c80"),
+                               (wf_c85, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c85"),
+                               (wf_c90, f"ens{TRANSFER_ENSEMBLE_K}x{TRANSFER_MAJORITY}c90")]
                 # K=4 ensemble variants (one extra config beyond family-diverse K=3)
                 if len(top4_cfgs) >= 4:
                     wf_k4m3 = walk_forward_ensemble(data, top4_cfgs,
                                                     conf_threshold=sym_conf,
                                                     majority=TRANSFER_MAJORITY,
                                                     signal_persist=1)
-                    wf_k4m2 = walk_forward_ensemble(data, top4_cfgs,
-                                                    conf_threshold=sym_conf,
-                                                    majority=maj2,
-                                                    signal_persist=1)
                     wf_k4m3c = walk_forward_ensemble(data, top4_cfgs,
                                                      conf_threshold=sym_conf + 0.05,
                                                      majority=TRANSFER_MAJORITY,
                                                      signal_persist=1)
-                    # unanimous K=4 at base conf and c70
-                    wf_k4m4 = walk_forward_ensemble(data, top4_cfgs,
-                                                    conf_threshold=sym_conf,
-                                                    majority=4,
-                                                    signal_persist=1)
-                    wf_k4m4c70 = walk_forward_ensemble(data, top4_cfgs,
-                                                       conf_threshold=sym_conf + 0.05,
-                                                       majority=4,
-                                                       signal_persist=1)
-                    candidates += [(wf_k4m3,    "ens4x3"),
-                                   (wf_k4m2,    "ens4x2"),
-                                   (wf_k4m3c,   "ens4x3c70"),
-                                   (wf_k4m4,    "ens4x4"),
-                                   (wf_k4m4c70, "ens4x4c70")]
-                # K=5 ensemble variant (majority=4 = 80% agreement, most selective)
-                if len(top5_cfgs) >= 5:
-                    wf_k5m4 = walk_forward_ensemble(data, top5_cfgs,
-                                                    conf_threshold=sym_conf,
-                                                    majority=4,
-                                                    signal_persist=1)
-                    candidates.append((wf_k5m4, "ens5x4"))
+                    candidates += [(wf_k4m3,  "ens4x3"),
+                                   (wf_k4m3c, "ens4x3c70")]
                 # Lower-conf variants: for high-WR stocks, relax conf to add trades
                 if sym_conf >= 0.65:
                     wf_c60_k4 = walk_forward_ensemble(data, top4_cfgs,
                                                       conf_threshold=sym_conf - 0.05,
                                                       majority=TRANSFER_MAJORITY,
                                                       signal_persist=1)
-                    wf_c55_k4 = walk_forward_ensemble(data, top4_cfgs,
-                                                      conf_threshold=sym_conf - 0.10,
-                                                      majority=TRANSFER_MAJORITY,
-                                                      signal_persist=1)
                     wf_c60_k3 = walk_forward_ensemble(data, top_sym_cfgs,
                                                       conf_threshold=sym_conf - 0.05,
-                                                      majority=TRANSFER_MAJORITY,
-                                                      signal_persist=1)
-                    wf_c55_k3 = walk_forward_ensemble(data, top_sym_cfgs,
-                                                      conf_threshold=sym_conf - 0.10,
                                                       majority=TRANSFER_MAJORITY,
                                                       signal_persist=1)
                     # persist=2 + lower-conf (c60): for high-WR stocks that benefit from
@@ -309,12 +274,9 @@ for sym in TEST_SYMBOLS:
                                                       majority=TRANSFER_MAJORITY,
                                                       signal_persist=2)
                     candidates += [(wf_c60_k4, "ens4x3c60"),
-                                   (wf_c55_k4, "ens4x3c55"),
                                    (wf_c60_k3, "ens3x3c60"),
-                                   (wf_c55_k3, "ens3x3c55"),
                                    (wf_c60_p2, "ens3x3c60p2")]
-                    # K=4/majority=4 (unanimous 4-way) + conf=0.60: most selective
-                    # ensemble for high-WR diversified stocks (e.g. AAPL)
+                    # K=4/majority=4 (unanimous 4-way) + conf=0.60
                     if len(top4_cfgs) >= 4:
                         wf_k4m4c60 = walk_forward_ensemble(data, top4_cfgs,
                                                             conf_threshold=sym_conf - 0.05,
