@@ -1,0 +1,218 @@
+// ============================================================
+// AI Peak / Valley Detector
+// ============================================================
+// Based on features discovered autonomously by the autoresearch-mlx
+// stock pattern experiment (TSLA training → US stock transfer).
+//
+// Top features found (in order of importance):
+//   1. return_20d      — 20-bar price momentum
+//   2. return_5d       — 5-bar short-term momentum
+//   3. range_pos_20d   — price position in 20-bar range [0,1]
+//   4. range_pos_10d   — price position in 10-bar range [0,1]
+//   5. rsi             — RSI overbought / oversold
+//   6. volatility_5d   — 5-bar high-low volatility
+//   7. volatility_10d  — 10-bar high-low volatility
+//   8. range_pos_5d    — price position in 5-bar range [0,1]
+//   9. return_10d      — 10-bar momentum
+//  10. log_volume      — volume confirmation
+//
+// Signal logic: each feature contributes ±1 point to a composite
+// PEAK score and VALLEY score.  A signal fires when the score
+// exceeds the user-defined threshold.
+// ============================================================
+
+//@version=5
+indicator("AI Peak / Valley Detector", overlay=true, max_labels_count=500)
+
+// ─────────────────────────────────────────────────────────────
+// USER INPUTS
+// ─────────────────────────────────────────────────────────────
+grp_sig   = "Signal Sensitivity"
+threshold = input.int   (6,   "Min score to signal (1–10)", minval=1, maxval=10, group=grp_sig)
+rsi_ob    = input.int   (65,  "RSI overbought level",       minval=50, maxval=90, group=grp_sig)
+rsi_os    = input.int   (35,  "RSI oversold level",         minval=10, maxval=50, group=grp_sig)
+vol_mult  = input.float (1.3, "Volume spike multiplier",    minval=1.0, step=0.1,  group=grp_sig)
+
+grp_feat  = "Feature Windows"
+w_short   = input.int   (5,   "Short window",   minval=2,  maxval=20,  group=grp_feat)
+w_mid     = input.int   (10,  "Mid window",     minval=5,  maxval=50,  group=grp_feat)
+w_long    = input.int   (20,  "Long window",    minval=10, maxval=100, group=grp_feat)
+rsi_len   = input.int   (14,  "RSI length",     minval=2,  maxval=30,  group=grp_feat)
+vol_ma_len= input.int   (14,  "Volume MA length",minval=5, maxval=50,  group=grp_feat)
+
+grp_disp  = "Display"
+show_score= input.bool  (true,  "Show score label on signal",   group=grp_disp)
+show_bg   = input.bool  (true,  "Highlight overbought/oversold background", group=grp_disp)
+show_table= input.bool  (true,  "Show live feature table",      group=grp_disp)
+
+// ─────────────────────────────────────────────────────────────
+// FEATURE 1 & 9: Price momentum (return over w bars)
+// ─────────────────────────────────────────────────────────────
+ret_short = (close - close[w_short]) / close[w_short]   // 5-bar return
+ret_mid   = (close - close[w_mid])   / close[w_mid]     // 10-bar return
+ret_long  = (close - close[w_long])  / close[w_long]    // 20-bar return
+
+// ─────────────────────────────────────────────────────────────
+// FEATURE 3, 4, 8: Range position  [0 = bottom, 1 = top]
+// ─────────────────────────────────────────────────────────────
+hi_short = ta.highest(close, w_short)
+lo_short = ta.lowest (close, w_short)
+hi_mid   = ta.highest(close, w_mid)
+lo_mid   = ta.lowest (close, w_mid)
+hi_long  = ta.highest(close, w_long)
+lo_long  = ta.lowest (close, w_long)
+
+rng_pos_short = (hi_short - lo_short) > 0 ? (close - lo_short) / (hi_short - lo_short) : 0.5
+rng_pos_mid   = (hi_mid   - lo_mid)   > 0 ? (close - lo_mid)   / (hi_mid   - lo_mid)   : 0.5
+rng_pos_long  = (hi_long  - lo_long)  > 0 ? (close - lo_long)  / (hi_long  - lo_long)  : 0.5
+
+// ─────────────────────────────────────────────────────────────
+// FEATURE 5 & 6: Volatility  (high-low range / close)
+// ─────────────────────────────────────────────────────────────
+vol_short = (ta.highest(high, w_short) - ta.lowest(low, w_short)) / close
+vol_mid   = (ta.highest(high, w_mid)   - ta.lowest(low, w_mid))   / close
+
+avg_vol_short = ta.sma(vol_short, 20)   // baseline volatility
+vol_z_short   = avg_vol_short > 0 ? (vol_short - avg_vol_short) / avg_vol_short : 0.0
+
+// ─────────────────────────────────────────────────────────────
+// FEATURE 5: RSI
+// ─────────────────────────────────────────────────────────────
+rsi_val = ta.rsi(close, rsi_len)
+
+// ─────────────────────────────────────────────────────────────
+// FEATURE 10: Volume confirmation
+// ─────────────────────────────────────────────────────────────
+avg_vol  = ta.sma(volume, vol_ma_len)
+vol_high = volume > avg_vol * vol_mult   // elevated volume flag
+
+// ─────────────────────────────────────────────────────────────
+// COMPOSITE SCORE  (−10 … +10)
+// Positive = bullish / peak conditions
+// Negative = bearish / valley conditions
+// ─────────────────────────────────────────────────────────────
+
+// Each condition returns +1 (peak evidence) or −1 (valley evidence)
+score_ret_short  = ret_short > 0 ? 1 : -1                 // 5d momentum
+score_ret_mid    = ret_mid   > 0 ? 1 : -1                 // 10d momentum
+score_ret_long   = ret_long  > 0 ? 1 : -1                 // 20d momentum
+
+score_rng_short  = rng_pos_short > 0.7 ? 1 : rng_pos_short < 0.3 ? -1 : 0
+score_rng_mid    = rng_pos_mid   > 0.7 ? 1 : rng_pos_mid   < 0.3 ? -1 : 0
+score_rng_long   = rng_pos_long  > 0.7 ? 1 : rng_pos_long  < 0.3 ? -1 : 0
+
+score_rsi        = rsi_val > rsi_ob ? 1 : rsi_val < rsi_os ? -1 : 0
+
+score_vol_spike  = vol_high ? (ret_short > 0 ? 1 : -1) : 0   // volume confirms direction
+
+score_volatility = vol_z_short > 0.5 ? (ret_short > 0 ? 1 : -1) : 0  // rising vol confirms
+
+composite = score_ret_short + score_ret_mid + score_ret_long +
+            score_rng_short + score_rng_mid  + score_rng_long +
+            score_rsi + score_vol_spike + score_volatility
+
+// ─────────────────────────────────────────────────────────────
+// SIGNAL CONDITIONS
+// ─────────────────────────────────────────────────────────────
+peak_signal   = composite >=  threshold
+valley_signal = composite <= -threshold
+
+// One-bar edge trigger (avoids repeated signals in a streak)
+peak_trigger   = peak_signal   and not peak_signal[1]
+valley_trigger = valley_signal and not valley_signal[1]
+
+// ─────────────────────────────────────────────────────────────
+// PLOTTING — Background
+// ─────────────────────────────────────────────────────────────
+bg_col = show_bg ?
+         (peak_signal   ? color.new(color.red,   88) :
+          valley_signal ? color.new(color.green, 88) : na) : na
+bgcolor(bg_col)
+
+// ─────────────────────────────────────────────────────────────
+// PLOTTING — Markers
+// ─────────────────────────────────────────────────────────────
+peak_lbl_text   = show_score ? "▼\n" + str.tostring(composite)  : "▼"
+valley_lbl_text = show_score ? "▲\n" + str.tostring(-composite) : "▲"
+
+if peak_trigger
+    label.new(bar_index, high * 1.001,
+              text  = peak_lbl_text,
+              style = label.style_label_down,
+              color = color.new(color.red, 15),
+              textcolor = color.white,
+              size  = size.small)
+
+if valley_trigger
+    label.new(bar_index, low * 0.999,
+              text  = valley_lbl_text,
+              style = label.style_label_up,
+              color = color.new(color.green, 15),
+              textcolor = color.white,
+              size  = size.small)
+
+// ─────────────────────────────────────────────────────────────
+// PLOTTING — Composite score as a separate pane line
+// ─────────────────────────────────────────────────────────────
+hline( threshold, "Peak threshold",   color=color.new(color.red,   40), linestyle=hline.style_dashed)
+hline(-threshold, "Valley threshold", color=color.new(color.green, 40), linestyle=hline.style_dashed)
+hline(0,          "Zero",             color=color.gray,                  linestyle=hline.style_dotted)
+
+plot(composite, "AI Score", color=composite > 0 ? color.red : color.green,
+     style=plot.style_histogram, linewidth=2)
+
+// ─────────────────────────────────────────────────────────────
+// LIVE FEATURE TABLE  (bottom-right corner)
+// ─────────────────────────────────────────────────────────────
+if show_table and barstate.islast
+    var table t = table.new(position.bottom_right, 3, 12,
+                             border_width=1,
+                             border_color=color.new(color.gray,50),
+                             bgcolor=color.new(color.black,70))
+
+    // Header
+    table.cell(t, 0, 0, "Feature",    text_color=color.gray,  text_size=size.small)
+    table.cell(t, 1, 0, "Value",      text_color=color.gray,  text_size=size.small)
+    table.cell(t, 2, 0, "Score",      text_color=color.gray,  text_size=size.small)
+
+    _row(row, name, val, score) =>
+        c = score > 0 ? color.red : score < 0 ? color.green : color.gray
+        table.cell(t, 0, row, name,                    text_color=color.silver, text_size=size.tiny)
+        table.cell(t, 1, row, str.tostring(val, "#.##"),text_color=c,           text_size=size.tiny)
+        table.cell(t, 2, row, score > 0 ? "+1" : score < 0 ? "-1" : " 0",
+                   text_color=c, text_size=size.tiny)
+
+    _row(1,  "ret_5d",      ret_short  * 100,  score_ret_short)
+    _row(2,  "ret_10d",     ret_mid    * 100,  score_ret_mid)
+    _row(3,  "ret_20d",     ret_long   * 100,  score_ret_long)
+    _row(4,  "pos_5d",      rng_pos_short,     score_rng_short)
+    _row(5,  "pos_10d",     rng_pos_mid,       score_rng_mid)
+    _row(6,  "pos_20d",     rng_pos_long,      score_rng_long)
+    _row(7,  "RSI",         rsi_val,           score_rsi)
+    _row(8,  "vol_spike",   volume / avg_vol,  score_vol_spike)
+    _row(9,  "volatility",  vol_z_short,       score_volatility)
+
+    // Total
+    table.cell(t, 0, 10, "─────────", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 1, 10, "─────────", text_color=color.gray, text_size=size.tiny)
+    table.cell(t, 2, 10, "─────────", text_color=color.gray, text_size=size.tiny)
+
+    total_c = composite >= threshold ? color.red : composite <= -threshold ? color.green : color.silver
+    table.cell(t, 0, 11, "TOTAL",                               text_color=total_c, text_size=size.small)
+    table.cell(t, 1, 11, "",                                    text_color=total_c, text_size=size.small)
+    table.cell(t, 2, 11, str.tostring(composite) + " / 9",      text_color=total_c, text_size=size.small)
+
+// ─────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────
+alertcondition(peak_trigger,
+               title   = "AI Peak Signal",
+               message = "{{ticker}} — AI Peak detected  score={{plot_0}}")
+
+alertcondition(valley_trigger,
+               title   = "AI Valley Signal",
+               message = "{{ticker}} — AI Valley detected  score={{plot_0}}")
+
+alertcondition(peak_trigger or valley_trigger,
+               title   = "AI Peak or Valley",
+               message = "{{ticker}} — AI extremum signal  score={{plot_0}}")

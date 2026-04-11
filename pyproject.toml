@@ -5,11 +5,12 @@ description = "Apple Silicon MLX port of Karpathy's autoresearch"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "mlx>=0.30.0",
+    "mlx>=0.30.0; sys_platform == 'darwin'",
     "numpy>=2.2.6",
     "pyarrow>=21.0.0",
     "regex>=2025.7.34",
     "requests>=2.32.0",
     "rustbpe>=0.1.0",
+    "scikit-learn>=1.5.0",
     "tiktoken>=0.11.0",
 ]
