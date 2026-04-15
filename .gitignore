@@ -2,8 +2,9 @@
 .venv/
 __pycache__/
 *.pyc
-*.log
 run.log
+logs/*.log
+!logs/.gitkeep
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md

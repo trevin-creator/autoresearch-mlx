@@ -19,7 +19,7 @@ uv sync
 uv run prepare.py
 
 # run one 5-minute training experiment
-uv run train.py
+uv run python scripts/run_experiment.py
 ```
 
 Then point Claude Code or another coding agent at `program.md` and let it run the loop.
@@ -28,10 +28,28 @@ Then point Claude Code or another coding agent at `program.md` and let it run th
 
 - `prepare.py` - data prep, tokenizer, dataloader, and evaluation. Treat as fixed.
 - `train.py` - model, optimizer, and training loop. This is the file the agent edits.
+- `scripts/run_experiment.py` - standard run entrypoint. Preserves `run.log` and archives `logs/<short_commit>.log`.
+- `scripts/backfill_logs.py` - conservative historical reconstruction to stable JSON stdout.
 - `program.md` - the autonomous experiment protocol.
-- `results.tsv` - logged experiment history.
+- `results.tsv` - durable run index.
+- `run.log` - latest transient log for quick `grep` and `tail`.
+- `logs/<short_commit>.log` - durable per-run local evidence.
 
-The loop is the same as upstream: edit `train.py`, run a fixed-budget experiment, read `val_bpb`, keep the change if it wins, revert if it loses, and repeat.
+The loop is the same as upstream: edit `train.py`, run a fixed-budget experiment, read `val_bpb`, keep the change if it wins, revert if it loses, and repeat. The difference is that the standard run entrypoint now preserves per-run evidence automatically: `run.log` stays as the latest transient log, while `logs/<short_commit>.log` is the deterministic durable archive for that run.
+
+## Evidence model
+
+`results.tsv` remains the durable run index. Archived logs under `logs/` are durable local evidence attached to those rows and are meant to travel with the repo working tree if you copy the project between machines. The archive convention is deterministic and simple: one commit maps to `logs/<short_commit>.log`.
+
+If the runner reports an archive collision with different bytes, that usually means the experiment was rerun without creating a new commit first. The fix is to create a fresh experiment commit before rerunning so each run keeps one unambiguous durable log.
+
+For best-effort historical enrichment, run:
+
+```bash
+uv run python scripts/backfill_logs.py
+```
+
+That emits a stable top-level JSON object to stdout. It never rewrites `results.tsv`, and missing historical logs stay valid as partial `TSV-only` evidence instead of turning into errors.
 
 ## Public baseline results
 
