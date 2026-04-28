@@ -4,3 +4,10 @@ c67ad2a	2.695369	26.9	discard	lower weight decay to 0.1
 909dd59	2.588904	26.9	keep	halve total batch size to 2^16
 4161af3	2.533728	26.9	keep	increase matrix LR to 0.04
 5efc7aa	1.807902	20.7	keep	reduce depth from 8 to 4
+01f4e8a	2.253558	10.7655	keep	M4 baseline with OOM backoff fix
+b8877be	2.182068	10.6843	keep	reduce depth 4 -> 3 (improved)
+0287970	2.179408	10.6843	keep	window pattern SSSL -> SSSS (marginal improvement)
+706a704	2.150233	13.1981	keep	reduce head dim 128 -> 96 (improved)
+a302b7f	2.057376	13.1718	keep	reduce depth 3 -> 2 (big improvement)
+7cdbd46	1.750182	9.08574	keep	reduce depth 2 -> 1 (massive improvement, 308 steps)
+86a665b	1.708182	9.10645	keep	reduce head dim 96 -> 64 (improved, 361 steps)
