@@ -19,3 +19,4 @@ bdee7e0-dirty	0.000000	0.000000	0.000000	2.736	crash	one-invoice DeepSeek OCR pl
 9f8e5cf-dirty	0.000000	0.000000	0.000000	12.428	crash	HunyuanOCR full BF16 low DPI trimmed decode
 9f8e5cf-dirty	0.000000	0.000000	0.000000	13.151	run	HunyuanOCR full BF16 low DPI trimmed decode fixed
 9f8e5cf-dirty	0.000000	0.000000	0.000000	8.523	run	HunyuanOCR OCR text prompt low DPI 96
+d0828be	0.489796	0.358039	0.000439	11.539	discard	round 1 PaddleOCR v4 OCR plus Mistral extraction
