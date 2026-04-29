@@ -1,77 +1,160 @@
-# autoresearch-mlx
+# invoice-ocr-autoresearch
 
-Apple Silicon (MLX) port of [Karpathy's autoresearch](https://github.com/karpathy/autoresearch).
+Autonomous experiment loop for invoice OCR and structured data extraction.
 
-Full credit to [@karpathy](https://github.com/karpathy) for the core idea: fixed-time autonomous research loops controlled through `program.md`. This port keeps the same basic rules: one mutable `train.py`, one metric (`val_bpb`), a fixed 5-minute training budget, and keep-or-revert via git. It runs natively on Apple Silicon through [MLX](https://github.com/ml-explore/mlx), so there is no PyTorch or CUDA dependency.
+The goal is to maximize extraction `accuracy` on a labeled invoice set. The runner also reports an `adjusted_score` that penalizes cost, latency, low throughput, and crashes, but accuracy remains the primary metric.
 
-## Quick start
+This repo is designed for “bring your own keys”: no credentials, invoices, predictions, logs, or generated reports are committed.
 
-Requirements: Apple Silicon Mac, Python 3.10+, [uv](https://docs.astral.sh/uv/).
+## What Is Included
 
-```bash
-# install uv if needed
-curl -LsSf https://astral.sh/uv/install.sh | sh
+- `train.py` - mutable experiment runner. Autoresearch edits this file.
+- `score_invoices.py` - fixed evaluator. Treat this as read-only during a run.
+- `program.md` - protocol for the autonomous keep/discard loop.
+- `results.tsv` - run history.
+- `pyproject.toml` / `uv.lock` - reproducible Python environment.
 
-# install dependencies
-uv sync
+## Data Layout
 
-# one-time data + tokenizer prep
-uv run prepare.py
+By default, the runner expects invoices one folder above the repo:
 
-# run one 5-minute training experiment
-uv run train.py
+```text
+../Training_invoices/
+  1.pdf
+  1.json
+  2.pdf
+  2.json
 ```
 
-Then point Claude Code or another coding agent at `program.md` and let it run the loop.
+Each document file should have a matching label JSON with the same stem. The current evaluator supports simple labels with header fields plus `Rows`, for example:
 
-## What matters
+```json
+{
+  "Vendor": "Acme",
+  "Invoice No": "123",
+  "Invoice Date": "4/13/2026",
+  "Invoice Amount": "748.05",
+  "Rows": [
+    {"Item Code": "1103", "Description": "Water", "Quantity": "10"}
+  ]
+}
+```
 
-- `prepare.py` - data prep, tokenizer, dataloader, and evaluation. Treat as fixed.
-- `train.py` - model, optimizer, and training loop. This is the file the agent edits.
-- `program.md` - the autonomous experiment protocol.
-- `results.tsv` - logged experiment history.
+Override the location with:
 
-The loop is the same as upstream: edit `train.py`, run a fixed-budget experiment, read `val_bpb`, keep the change if it wins, revert if it loses, and repeat.
+```bash
+export INVOICE_DATA_DIR=/path/to/Training_invoices
+```
 
-## Public baseline results
+## Setup
 
-The public `results.tsv` captures the initial hardware-local walk from the default baseline down to `1.807902`:
+Requirements: Python 3.10+ and [uv](https://docs.astral.sh/uv/).
 
-| Commit | val_bpb | Status | Description |
-|---|---:|---|---|
-| `383abb4` | 2.667000 | keep | baseline (AdamW, default config) |
-| `909dd59` | 2.588904 | keep | halve total batch size to `2^16` |
-| `4161af3` | 2.533728 | keep | increase matrix LR to `0.04` |
-| `5efc7aa` | 1.807902 | keep | reduce depth from `8` to `4` |
+```bash
+uv sync
+```
 
-That result already shows the core Apple Silicon pattern: with a fixed 5-minute wall clock, smaller faster-training models can beat larger ones simply by fitting more optimizer steps into the budget.
+For local OCR experiments:
 
-## Longer Apple Silicon runs
+```bash
+uv sync --extra local-ocr
+```
 
-Longer overnight runs on the working MLX port pushed much further. The long Mac Mini test is included here because it found a meaningfully different winner stack from the Max-class machines.
+For Hugging Face document models such as Donut, LayoutLMv3, HunyuanOCR, and DeepSeek-OCR:
 
-| Machine | Current best | Starting point | Repeated wins |
-|---|---:|---:|---|
-| M4 Max #1 | 1.294526 | 1.596971 | AdamW-only, low matrix LR, 3x MLP, no logit cap, moderate weight decay |
-| M4 Max #2 | 1.330509 | 1.807902 | leaner batch, long anneal, SiLU, lower regularization, no logit cap |
-| Mac Mini (long run) | 1.353329 | 1.922472 | Muon, sharper attention, smaller MLP, lower scalar LR |
+```bash
+uv sync --extra local-ocr --extra hf-doc
+```
 
-The Mac Mini result matters because it did not just rediscover the same exact recipe. On smaller Apple Silicon hardware, the strongest changes leaned toward more aggressive step-efficiency wins. Later transfer tests showed some of those Mac Mini findings did not carry cleanly onto the Max baseline, which is exactly the kind of hardware-specific behavior this loop is useful for uncovering.
+The `hf-doc` extra pins the source Transformers commit required by HunyuanOCR.
 
-## Differences from upstream
+## Credentials
 
-- **MLX instead of PyTorch/CUDA.** Native Apple Silicon training with unified memory.
-- **AdamW-only public path.** This public `train.py` keeps the default path simple. The long Mac Mini run above explored a Muon variant in the working port, but that branch is not exposed as a public default here.
-- **Smaller eval token budget.** Reduced for faster iteration on Apple Silicon while keeping the same `evaluate_bpb` interface in `prepare.py`.
-- **Roughly 6-7 minutes per experiment.** Expect 5 minutes of training plus compile and eval overhead.
-- **MFU reporting is placeholder.** There is no Apple Silicon equivalent to the H100 FLOPs reference used upstream.
+Export only the keys you intend to use. Do not commit keys.
 
-## Acknowledgments
+```bash
+export MISTRAL_API_KEY=...
+export OPENROUTER_API_KEY=...
+export AZURE_FORM_RECOGNIZER_ENDPOINT=...
+export AZURE_FORM_RECOGNIZER_KEY=...
+export HF_TOKEN=...
+export AZURE_CUSTOM_MODEL_ID=...
+```
 
-- [Andrej Karpathy](https://github.com/karpathy) - autoresearch and nanochat
-- [scasella/nanochat-mlx](https://github.com/scasella/nanochat-mlx) - MLX GPT and optimizer reference
-- [awni/picochat](https://github.com/awni/picochat) - MLX training patterns
-- [Apple MLX team](https://github.com/ml-explore/mlx)
+On macOS with zsh, put personal exports in your home config, not in this repo:
+
+```bash
+/Users/<you>/.zshrc
+```
+
+Then reload:
+
+```bash
+source ~/.zshrc
+```
+
+## Run One Experiment
+
+Start with one invoice while developing:
+
+```bash
+INVOICE_DOC_LIMIT=1 \
+INVOICE_EXPERIMENT=mistral_ocr_small4_v1 \
+RUN_DESCRIPTION="Mistral OCR plus structured extraction" \
+uv run train.py > run.log 2>&1
+```
+
+Useful experiments:
+
+```bash
+INVOICE_EXPERIMENT=mistral_ocr_small4_v1
+INVOICE_EXPERIMENT=mistral_ocr_small4_table_html
+INVOICE_EXPERIMENT=paddleocr_v4_mistral
+INVOICE_EXPERIMENT=azure_prebuilt_invoice
+INVOICE_EXPERIMENT=openrouter_vision
+INVOICE_EXPERIMENT=paddleocr_v4_regex
+INVOICE_EXPERIMENT=donut_cord_regex
+INVOICE_EXPERIMENT=layoutlmv3_invoice_token
+INVOICE_EXPERIMENT=hunyuanocr_direct
+INVOICE_EXPERIMENT=deepseek_ocr_regex
+```
+
+For HunyuanOCR on Apple Silicon, use lower render DPI to avoid MPS memory errors:
+
+```bash
+PDF_RENDER_DPI=96 HUNYUAN_MAX_NEW_TOKENS=512
+```
+
+## Tracking Runs
+
+`train.py` appends every run to `results.tsv` unless disabled:
+
+```bash
+AUTO_LOG_RESULTS=0 uv run train.py
+```
+
+After a run:
+
+```bash
+tail -n 5 results.tsv
+tail -n 80 run.log
+```
+
+The TSV columns are:
+
+```tsv
+commit	accuracy	adjusted_score	cost_per_doc	latency_s	status	description
+```
+
+Use `keep` for improvements, `discard` for losing ideas, and `crash` for failed runs. The loop should prefer higher `accuracy`; use `adjusted_score` as a tie-breaker.
+
+## Current Practical Notes
+
+- Mistral OCR plus structured extraction is the strongest current baseline.
+- PaddleOCR v4 works locally; pairing it with Mistral extraction is more useful than regex-only parsing.
+- Azure Prebuilt is wired, but requires Azure credentials.
+- HunyuanOCR can run locally with source Transformers and low DPI, but current output quality is weak on the sample invoice.
+- DeepSeek-OCR currently has Transformers/model-code compatibility issues on this Mac path and is better suited to a separate remote GPU environment.
 
 ## License
 
