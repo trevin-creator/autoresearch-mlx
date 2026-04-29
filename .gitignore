@@ -1,9 +1,12 @@
 .DS_Store
+.zshrc
 .venv/
 __pycache__/
 *.pyc
 *.log
 run.log
+predictions.jsonl
+invoice_report.json
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md
