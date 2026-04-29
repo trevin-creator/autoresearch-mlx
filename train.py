@@ -654,25 +654,39 @@ def run_hunyuanocr(path: Path) -> str:
     model_id = os.getenv("HUNYUAN_MODEL", "tencent/HunyuanOCR")
     image_path = render_document_images(path)[0]
     image = Image.open(image_path).convert("RGB")
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True, use_fast=False)
     model_cls = getattr(transformers, "HunYuanVLForConditionalGeneration", None)
     if model_cls is None:
         from transformers import AutoModelForImageTextToText
 
         model_cls = AutoModelForImageTextToText
-    model = model_cls.from_pretrained(model_id, trust_remote_code=True, torch_dtype=hf_dtype(torch))
     device = hf_device(torch)
-    model.to(device)
+    dtype = torch.bfloat16 if device in {"cuda", "mps"} else torch.float32
+    model = model_cls.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        dtype=dtype,
+        attn_implementation=os.getenv("HUNYUAN_ATTN_IMPLEMENTATION", "eager"),
+    )
+    model.to(device=device, dtype=dtype)
+    model.eval()
 
     prompt = os.getenv("HUNYUAN_PROMPT", EXTRACTION_PROMPT)
     messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}]}]
     if hasattr(processor, "apply_chat_template"):
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = processor(text=[text], images=[image], return_tensors="pt").to(device)
+        inputs = processor(text=[text], images=[image], return_tensors="pt")
     else:
-        inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
-    output_ids = model.generate(**inputs, max_new_tokens=int(os.getenv("HUNYUAN_MAX_NEW_TOKENS", "1024")))
-    return processor.batch_decode(output_ids, skip_special_tokens=True)[0]
+        inputs = processor(images=image, text=prompt, return_tensors="pt")
+    inputs = batch_to_device_dtype(inputs, device, dtype)
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, max_new_tokens=int(os.getenv("HUNYUAN_MAX_NEW_TOKENS", "1024")), do_sample=False)
+    input_ids = inputs.get("input_ids")
+    if input_ids is None:
+        input_ids = inputs.get("inputs")
+    if input_ids is not None:
+        output_ids = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(input_ids, output_ids)]
+    return clean_repeated_substrings(processor.batch_decode(output_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0])
 
 
 def run_deepseek_ocr(path: Path) -> str:
@@ -915,8 +929,38 @@ def hf_dtype(torch_module):
     return torch_module.float32
 
 
+def batch_to_device_dtype(batch: Any, device: str, dtype: Any) -> Any:
+    if hasattr(batch, "items"):
+        return {key: batch_to_device_dtype(value, device, dtype) for key, value in batch.items()}
+    if isinstance(batch, list):
+        return [batch_to_device_dtype(value, device, dtype) for value in batch]
+    if isinstance(batch, tuple):
+        return tuple(batch_to_device_dtype(value, device, dtype) for value in batch)
+    if hasattr(batch, "to"):
+        if getattr(batch, "is_floating_point", lambda: False)():
+            return batch.to(device=device, dtype=dtype)
+        return batch.to(device=device)
+    return batch
+
+
 def collapse_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def clean_repeated_substrings(text: str) -> str:
+    n = len(text)
+    if n < 8000:
+        return text
+    for length in range(2, n // 10 + 1):
+        candidate = text[-length:]
+        count = 0
+        index = n - length
+        while index >= 0 and text[index : index + length] == candidate:
+            count += 1
+            index -= length
+        if count >= 10:
+            return text[: n - length * (count - 1)]
+    return text
 
 
 def parse_extraction_json(content: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:

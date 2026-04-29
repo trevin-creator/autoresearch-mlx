@@ -10,3 +10,12 @@ bdee7e0-dirty	0.020408	0.000000	0.000000	11.171	run	one-invoice LayoutLMv3 token
 bdee7e0-dirty	0.000000	0.000000	0.000000	2.768	crash	one-invoice HunyuanOCR direct JSON prompt
 bdee7e0-dirty	0.000000	0.000000	0.000000	1.737	crash	one-invoice DeepSeek OCR plus heuristic parser
 bdee7e0-dirty	0.000000	0.000000	0.000000	2.736	crash	one-invoice DeepSeek OCR plus heuristic parser after matplotlib install
+9f8e5cf	0.000000	0.000000	0.000000	40.762	crash	HunyuanOCR after source transformers
+9f8e5cf-dirty	0.000000	0.000000	0.000000	5.787	crash	HunyuanOCR float32 Mac dtype fix
+9f8e5cf-dirty	0.000000	0.000000	0.000000	5.240	crash	HunyuanOCR recursive float32 input fix
+9f8e5cf-dirty	0.000000	0.000000	0.000000	7.787	crash	HunyuanOCR BF16 vision tower fix
+9f8e5cf-dirty	0.000000	0.000000	0.000000	9.867	crash	HunyuanOCR BF16 vision low DPI 96 tokens 256
+9f8e5cf-dirty	0.000000	0.000000	0.000000	14.304	run	HunyuanOCR full BF16 low DPI 96 tokens 256
+9f8e5cf-dirty	0.000000	0.000000	0.000000	12.428	crash	HunyuanOCR full BF16 low DPI trimmed decode
+9f8e5cf-dirty	0.000000	0.000000	0.000000	13.151	run	HunyuanOCR full BF16 low DPI trimmed decode fixed
+9f8e5cf-dirty	0.000000	0.000000	0.000000	8.523	run	HunyuanOCR OCR text prompt low DPI 96
