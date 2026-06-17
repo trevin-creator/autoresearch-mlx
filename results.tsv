@@ -1,2 +1,3 @@
 commit	val_bpb	memory_gb	status	description
 76ed5cc	2.135858	10.8	keep	baseline: DEPTH=4 TOTAL_BS=2^16 WARMDOWN=0.5 WINDOW=SSSL
+59f095e	1.937008	10.7	keep	halve TOTAL_BATCH_SIZE to 2^15 (grad_accum=1 doubles optimizer steps)
