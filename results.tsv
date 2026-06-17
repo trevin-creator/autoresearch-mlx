@@ -3,3 +3,4 @@ commit	val_bpb	memory_gb	status	description
 59f095e	1.937008	10.7	keep	halve TOTAL_BATCH_SIZE to 2^15 (grad_accum=1 doubles optimizer steps)
 5176130	1.895165	10.7	keep	reduce WARMDOWN_RATIO to 0.3 (more steps at peak LR)
 d4f2e5f	1.928038	10.7	discard	WINDOW_PATTERN=L (all full attention) - worse than SSSL
+9f75b32	1.989096	10.7	discard	ADAM_BETAS=(0.9, 0.95) standard momentum - worse than (0.8, 0.95)
