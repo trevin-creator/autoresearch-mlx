@@ -46,6 +46,30 @@ The public `results.tsv` captures the initial hardware-local walk from the defau
 
 That result already shows the core Apple Silicon pattern: with a fixed 5-minute wall clock, smaller faster-training models can beat larger ones simply by fitting more optimizer steps into the budget.
 
+## Jun 2026 session — `autoresearch/jun17`
+
+Four experiments run from the default `DEPTH=4` baseline on Apple Silicon. Starting point: `val_bpb = 2.135858`.
+
+| Commit | val_bpb | Δ | Status | Change |
+|---|---:|---:|---|---|
+| `76ed5cc` | 2.135858 | — | baseline | `DEPTH=4`, `TOTAL_BATCH_SIZE=2^16`, `WARMDOWN=0.5`, `WINDOW=SSSL` |
+| `59f095e` | 1.937008 | −0.199 | ✅ keep | `TOTAL_BATCH_SIZE` `2^16` → `2^15` (eliminates grad accumulation, doubles optimizer steps 120→240) |
+| `5176130` | 1.895165 | −0.042 | ✅ keep | `WARMDOWN_RATIO` `0.5` → `0.3` (more budget at peak LR before cooldown) |
+| `d4f2e5f` | 1.928038 | +0.033 | ❌ discard | `WINDOW_PATTERN` `SSSL` → `L` — full attention in all layers performed worse |
+| `9f75b32` | 1.989096 | +0.094 | ❌ discard | `ADAM_BETAS` `(0.8, 0.95)` → `(0.9, 0.95)` — higher β₁ hurt significantly |
+
+**Net gain: 2.135858 → 1.895165 (−11.3%) in two changes.**
+
+### Key findings
+
+**Batch size is the biggest lever on Apple Silicon.** Halving `TOTAL_BATCH_SIZE` from `2^16` to `2^15` removed the one gradient-accumulation step, doubling optimizer updates from 120 to 240 within the same 5-minute wall-clock budget. This alone delivered a −0.199 improvement — the largest single gain in the session. The core constraint on Apple Silicon is not model capacity but total optimizer steps in the fixed time budget.
+
+**The `SSSL` sliding-window pattern should be kept.** Switching all four layers to full attention (`L`) made things worse despite the intuition that more global context helps. The mixed short/long pattern appears to act as implicit regularization at this parameter count.
+
+**β₁=0.8 is correct for this step count.** The aggressive momentum (vs. standard β₁=0.9) was validated: the optimizer's faster gradient response is well-suited to ~240 steps, not just the H100 runs it was tuned for.
+
+**Reducing warmdown is a reliable small win.** Cutting `WARMDOWN_RATIO` from 0.5 to 0.3 added −0.042 at zero memory cost. With a fixed step budget, every step spent in cooldown is a step not spent learning.
+
 ## Longer Apple Silicon runs
 
 Longer overnight runs on the working MLX port pushed much further. The long Mac Mini test is included here because it found a meaningfully different winner stack from the Max-class machines.
