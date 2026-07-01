@@ -5,3 +5,4 @@ ba6ebf6	2.068328	20.7	keep	M2 32GB local baseline depth 4 AdamW public-best arch
 cd16958	1.939317	20.7	keep	remove logit cap
 9f2d6ae	1.819912	20.7	keep	lower weight decay to 0.1 with no logit cap
 493045a	1.714769	20.7	keep	lower matrix lr to 0.02
+adeb1ed	1.574941	20.7	keep	lower matrix lr to 0.01
