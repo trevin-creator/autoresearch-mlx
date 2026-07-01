@@ -3,3 +3,4 @@ ba6ebf6	2.068328	20.7	keep	M2 32GB local baseline depth 4 AdamW public-best arch
 37f4fdf	2.303194	20.7	discard	reduce depth to 3
 142f570	2.300722	20.7	discard	halve total batch size to 2^15
 cd16958	1.939317	20.7	keep	remove logit cap
+9f2d6ae	1.819912	20.7	keep	lower weight decay to 0.1 with no logit cap
