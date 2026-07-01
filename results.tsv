@@ -6,3 +6,10 @@ cd16958	1.939317	20.7	keep	remove logit cap
 9f2d6ae	1.819912	20.7	keep	lower weight decay to 0.1 with no logit cap
 493045a	1.714769	20.7	keep	lower matrix lr to 0.02
 adeb1ed	1.574941	20.7	keep	lower matrix lr to 0.01
+50c3170	1.560263	20.7	keep	lower matrix lr to 0.005
+75a8b26	1.565770	20.7	discard	lower matrix lr to 0.0025
+68fe428	1.970684	20.7	discard	lower weight decay to 0.05; run paused/stalled during training
+9488a0e	2.578350	20.7	discard	lengthen warmdown ratio to 0.75; invalid paused run only reached 6 steps
+2c8cdfb	1.698889	20.7	discard	lengthen warmdown ratio to 0.75 with caffeinate
+960ac87	1.893022	22.7	discard	switch MLP activation to SiLU
+f7e1204	1.594073	20.7	discard	lower scalar lr to 0.25
