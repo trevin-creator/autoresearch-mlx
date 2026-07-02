@@ -58,6 +58,28 @@ Longer overnight runs on the working MLX port pushed much further. The long Mac 
 
 The Mac Mini result matters because it did not just rediscover the same exact recipe. On smaller Apple Silicon hardware, the strongest changes leaned toward more aggressive step-efficiency wins. Later transfer tests showed some of those Mac Mini findings did not carry cleanly onto the Max baseline, which is exactly the kind of hardware-specific behavior this loop is useful for uncovering.
 
+## Rigorous keep/discard (optional)
+
+A single 5-minute run is noisy — re-running the *same* `train.py` moves `val_bpb`
+by ~0.03. Deciding keep/discard on one run below that threshold just chases
+noise, and since the loop only keeps a run that dips below the running best, the
+recorded curve is an optimistic running-minimum that regresses on honest re-eval.
+
+`rigor.py` gates the decision instead of eyeballing a single delta: it runs a few
+seeds and keeps a change only if it beats the current best with high confidence
+(bootstrap), fails a clear loser fast after one run, and never re-scores an
+identical `train.py`.
+
+```
+uv run rigor.py run "halve the batch size"   # score train.py vs best (3 seeds)
+uv run rigor.py run "..." --seeds 5 --confidence 0.9
+uv run rigor.py best                          # current best
+uv run rigor.py log                           # every scored config
+```
+
+It never edits `train.py`, touches git, or changes `evaluate_bpb` — it only
+decides, and writes samples to `rigor_ledger.jsonl`.
+
 ## Differences from upstream
 
 - **MLX instead of PyTorch/CUDA.** Native Apple Silicon training with unified memory.

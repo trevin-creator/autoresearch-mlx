@@ -7,3 +7,6 @@ run.log
 surfaces.txt
 surface-verify-prompt.md
 build-2-closeout.md
+
+# rigor.py runtime state
+rigor_ledger.jsonl
