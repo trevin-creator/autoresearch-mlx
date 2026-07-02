@@ -13,3 +13,8 @@ adeb1ed	1.574941	20.7	keep	lower matrix lr to 0.01
 2c8cdfb	1.698889	20.7	discard	lengthen warmdown ratio to 0.75 with caffeinate
 960ac87	1.893022	22.7	discard	switch MLP activation to SiLU
 f7e1204	1.594073	20.7	discard	lower scalar lr to 0.25
+3dcb813	1.555172	20.2	keep	reduce MLP expansion to 3x
+8ede943	1.569813	19.7	discard	reduce MLP expansion to 2x
+5b05918	1.573964	20.2	discard	lower matrix lr to 0.0025 on 3x MLP
+941a765	1.565600	20.2	discard	raise matrix lr to 0.0075 on 3x MLP
+210aa32	1.613182	19.9	discard	reduce MLP expansion to 2.5x
