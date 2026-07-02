@@ -1,5 +1,8 @@
 .DS_Store
 .venv/
+.venv-checks/
+.autoresearch-runtime.env
+*.egg-info/
 __pycache__/
 *.pyc
 *.log
