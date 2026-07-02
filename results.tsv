@@ -1,6 +1,20 @@
 commit	val_bpb	memory_gb	status	description
-383abb4	2.667000	26.9	keep	baseline (AdamW, default config)
-c67ad2a	2.695369	26.9	discard	lower weight decay to 0.1
-909dd59	2.588904	26.9	keep	halve total batch size to 2^16
-4161af3	2.533728	26.9	keep	increase matrix LR to 0.04
-5efc7aa	1.807902	20.7	keep	reduce depth from 8 to 4
+ba6ebf6	2.068328	20.7	keep	M2 32GB local baseline depth 4 AdamW public-best architecture
+37f4fdf	2.303194	20.7	discard	reduce depth to 3
+142f570	2.300722	20.7	discard	halve total batch size to 2^15
+cd16958	1.939317	20.7	keep	remove logit cap
+9f2d6ae	1.819912	20.7	keep	lower weight decay to 0.1 with no logit cap
+493045a	1.714769	20.7	keep	lower matrix lr to 0.02
+adeb1ed	1.574941	20.7	keep	lower matrix lr to 0.01
+50c3170	1.560263	20.7	keep	lower matrix lr to 0.005
+75a8b26	1.565770	20.7	discard	lower matrix lr to 0.0025
+68fe428	1.970684	20.7	discard	lower weight decay to 0.05; run paused/stalled during training
+9488a0e	2.578350	20.7	discard	lengthen warmdown ratio to 0.75; invalid paused run only reached 6 steps
+2c8cdfb	1.698889	20.7	discard	lengthen warmdown ratio to 0.75 with caffeinate
+960ac87	1.893022	22.7	discard	switch MLP activation to SiLU
+f7e1204	1.594073	20.7	discard	lower scalar lr to 0.25
+3dcb813	1.555172	20.2	keep	reduce MLP expansion to 3x
+8ede943	1.569813	19.7	discard	reduce MLP expansion to 2x
+5b05918	1.573964	20.2	discard	lower matrix lr to 0.0025 on 3x MLP
+941a765	1.565600	20.2	discard	raise matrix lr to 0.0075 on 3x MLP
+210aa32	1.613182	19.9	discard	reduce MLP expansion to 2.5x
