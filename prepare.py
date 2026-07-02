@@ -331,14 +331,28 @@ def evaluate_bpb(model, tokenizer, batch_size):
     total_nats = 0.0
     total_bytes = 0
 
+    # A single forward pass materializes a (rows, MAX_SEQ_LEN, VOCAB_SIZE)
+    # float32 logits tensor. At the defaults (256 x 2048 x 8192) that is 16 GiB
+    # in one buffer, which exceeds the Metal max buffer size on 24GB Macs and
+    # OOMs the final eval (issue #2). Cap the rows per forward so no single
+    # logits tensor exceeds the budget below; BPB is a plain sum over tokens,
+    # so splitting the batch is numerically exact regardless of batch_size.
+    logits_budget_bytes = 2 * 1024**3
+    bytes_per_row = MAX_SEQ_LEN * VOCAB_SIZE * 4
+    micro_batch = max(1, min(batch_size, logits_budget_bytes // bytes_per_row))
+
     for _ in range(steps):
         x, y, _ = next(val_loader)
-        loss_flat = model(x, y, reduction="none").reshape(-1)
-        y_flat = y.reshape(-1)
-        nbytes = mx.take(token_bytes, y_flat, axis=0)
-        mask = nbytes > 0
-        total_nats += mx.sum(loss_flat * mask).item()
-        total_bytes += int(mx.sum(nbytes).item())
+        for start in range(0, x.shape[0], micro_batch):
+            xb = x[start:start + micro_batch]
+            yb = y[start:start + micro_batch]
+            loss_flat = model(xb, yb, reduction="none").reshape(-1)
+            y_flat = yb.reshape(-1)
+            nbytes = mx.take(token_bytes, y_flat, axis=0)
+            mask = nbytes > 0
+            total_nats += mx.sum(loss_flat * mask).item()
+            total_bytes += int(mx.sum(nbytes).item())
+            mx.clear_cache()
 
     if total_bytes == 0:
         return float("inf")

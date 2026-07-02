@@ -182,15 +182,19 @@ class GPT(nn.Module):
         return window_sizes
 
     def _get_masks(self, seq_len):
+        # Build masks in the model's dtype (bfloat16). scaled_dot_product_attention
+        # requires the mask to promote to the q/k/v dtype; now that the residual
+        # stream stays bf16 (issue #3), a float32 mask no longer promotes.
+        dtype = self.wte.weight.dtype
         unique_windows = set(self.window_sizes)
         for window_size in unique_windows:
-            key = (seq_len, window_size)
+            key = (seq_len, window_size, dtype)
             if key not in self._mask_cache:
                 if window_size >= seq_len:
-                    self._mask_cache[key] = create_additive_causal_mask(seq_len)
+                    self._mask_cache[key] = create_additive_causal_mask(seq_len, dtype=dtype)
                 else:
-                    self._mask_cache[key] = create_sliding_window_mask(seq_len, window_size)
-        return [self._mask_cache[(seq_len, window_size)] for window_size in self.window_sizes]
+                    self._mask_cache[key] = create_sliding_window_mask(seq_len, window_size, dtype=dtype)
+        return [self._mask_cache[(seq_len, window_size, dtype)] for window_size in self.window_sizes]
 
     def __call__(self, idx, targets=None, reduction="mean"):
         _, seq_len = idx.shape
@@ -200,7 +204,11 @@ class GPT(nn.Module):
         x = norm(x)
         x0 = x
         for i, block in enumerate(self.blocks):
-            x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
+            # Cast the fp32 scalars to the hidden-state dtype so the residual
+            # stream stays bfloat16. Without this, float32 * bfloat16 promotes
+            # to float32 and the whole network silently runs in fp32 after the
+            # first block, defeating the bf16 init (issue #3).
+            x = self.resid_lambdas[i].astype(x.dtype) * x + self.x0_lambdas[i].astype(x.dtype) * x0
             ve = self.value_embeds[str(i)](idx) if str(i) in self.value_embeds else None
             x = block(x, ve, masks[i])
         x = norm(x)
