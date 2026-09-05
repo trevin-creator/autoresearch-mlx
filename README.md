@@ -6,7 +6,10 @@ Full credit to [@karpathy](https://github.com/karpathy) for the core idea: fixed
 
 ## Quick start
 
-Requirements: Apple Silicon Mac, Python 3.10+, [uv](https://docs.astral.sh/uv/).
+Requirements: Apple Silicon Mac, Python 3.10-3.13, [uv](https://docs.astral.sh/uv/).
+
+Setup notes, the local optimization record and measured numbers for this
+checkout are in [MAC.md](MAC.md).
 
 ```bash
 # install uv if needed

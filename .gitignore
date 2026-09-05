@@ -10,3 +10,6 @@ build-2-closeout.md
 
 # rigor.py runtime state
 rigor_ledger.jsonl
+
+# local benchmark + experiment logs
+runs/
