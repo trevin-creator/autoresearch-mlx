@@ -73,8 +73,10 @@ program.md ──(instructions)──> AI agent edits train.py
 ### `program.md`: instructions for the AI agent
 - **What it does:** the prompt you give an AI coding agent so it runs the
   research loop by itself: create an `autoresearch/<tag>` branch, run a
-  baseline, then repeatedly edit `train.py`, run it, and keep or revert based on
-  `val_bpb`, logging each result to `results.tsv`.
+  baseline, then repeatedly edit `train.py`, score it with `rigor.py --seeds 5`,
+  and keep or revert based on rigor's verdict (not a single run), logging each
+  result to `results.tsv`. Discarded rows are written after the `git reset`, so
+  they aren't lost.
 - **Check it works:** it isn't code. Read it and confirm the steps match how you
   want the agent to behave.
 
