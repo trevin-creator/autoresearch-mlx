@@ -85,8 +85,17 @@ It isn't tied to training: any experiment that is a command printing
 subcommand; give each study its own ledger:
 
 ```
-python rigor.py --cmd "python bench.py" --metric throughput --maximize \
+python rigor.py --cmd "python bench.py" --metric throughput:max \
     --files bench.py kernel.c --ledger bench_ledger.jsonl run "unroll inner loop"
+```
+
+Several metrics: repeat `--metric`. The first decides keep/discard; the rest are
+guardrails, and a change is discarded if it's confidently worse on any of them.
+Append `:max` for higher-is-better (default `:min`). For example, keep a lower
+`val_bpb` only if it doesn't cost memory:
+
+```
+uv run rigor.py --metric val_bpb --metric peak_vram_mb run "wider MLP"
 ```
 
 A run is discarded after one try only if it's worse than the best by
