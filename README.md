@@ -80,6 +80,19 @@ uv run rigor.py log                           # every scored config
 It never edits `train.py`, touches git, or changes `evaluate_bpb` — it only
 decides, and writes samples to `rigor_ledger.jsonl`.
 
+It isn't tied to training: any experiment that is a command printing
+`<metric>: <value>` (or `<metric>=<value>`) works. Global options go before the
+subcommand; give each study its own ledger:
+
+```
+python rigor.py --cmd "python bench.py" --metric throughput --maximize \
+    --files bench.py kernel.c --ledger bench_ledger.jsonl run "unroll inner loop"
+```
+
+A run is discarded after one try only if it's worse than the best by
+`--early-margin` (default: 3× the standard deviation of the best's runs). A
+crash is logged but can be retried.
+
 ## Differences from upstream
 
 - **MLX instead of PyTorch/CUDA.** Native Apple Silicon training with unified memory.
