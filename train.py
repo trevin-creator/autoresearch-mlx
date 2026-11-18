@@ -476,7 +476,7 @@ while True:
     mx.eval(model.parameters(), *optimizer.state)
 
     train_loss_f = train_loss_sum / grad_accum_steps  # mean over microbatches, not just the last
-    if train_loss_f > 100:
+    if not math.isfinite(train_loss_f) or train_loss_f > 100:  # NaN > 100 is False, so check explicitly
         print("FAIL")
         raise SystemExit(1)
 
