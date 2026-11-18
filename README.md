@@ -80,6 +80,36 @@ uv run rigor.py log                           # every scored config
 It never edits `train.py`, touches git, or changes `evaluate_bpb` — it only
 decides, and writes samples to `rigor_ledger.jsonl`.
 
+It isn't tied to training: any experiment that is a command printing
+`<metric>: <value>` (or `<metric>=<value>`) works. Global options go before the
+subcommand; give each study its own ledger:
+
+```
+python rigor.py --cmd "python bench.py" --metric throughput:max \
+    --files bench.py kernel.c --ledger bench_ledger.jsonl run "unroll inner loop"
+```
+
+Several metrics: repeat `--metric`. The first decides keep/discard; the rest are
+guardrails, and a change is discarded if it's confidently worse on any of them.
+Append `:max` for higher-is-better (default `:min`). For example, keep a lower
+`val_bpb` only if it doesn't cost memory:
+
+```
+uv run rigor.py --metric val_bpb --metric peak_vram_mb run "wider MLP"
+```
+
+A run is discarded after one try only if it's worse than the best by
+`--early-margin` (default: 3× the standard deviation of the best's runs). A
+crash is logged but can be retried.
+
+Seeds: run *i* gets `SEED=i` in its environment (`train.py` reads it; default
+42 when unset), so every config runs on the same seeds 0, 1, 2, ... With
+`--seeds 5` or more, runs pair up by seed and an exact sign-flip test on the
+per-seed differences decides, which cancels seed-to-seed variance and catches
+smaller real improvements. With the default 3 seeds it uses the unpaired
+bootstrap, because 3 paired seeds can't honestly show 95% confidence. For other
+experiments, read `SEED` (or name another variable with `--seed-env`).
+
 ## Differences from upstream
 
 - **MLX instead of PyTorch/CUDA.** Native Apple Silicon training with unified memory.

@@ -9,13 +9,13 @@ This is an Apple Silicon (MLX) port of Karpathy's autoresearch — an experiment
 To set up a new experiment, work with the user to:
 
 1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar5`). The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
-2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
+2. **Create the branch**: `git checkout -b autoresearch/<tag>` from the repo's default branch (check with `git symbolic-ref --short refs/remotes/origin/HEAD`). The working tree must be clean first (`git status --short` prints nothing).
 3. **Read the in-scope files**: The repo is small. Read these files for full context:
    - `README.md` — repository context.
    - `prepare.py` — fixed constants, data prep, tokenizer, dataloader, evaluation. Do not modify.
    - `train.py` — the file you modify. Model architecture, optimizer, training loop.
 4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
-5. **Initialize results.tsv**: Create `results.tsv` with header row and baseline entry. Run `uv run train.py` once to establish YOUR baseline on this hardware. Do NOT use baseline numbers from other platforms.
+5. **Initialize results.tsv**: Create `results.tsv` with header row and baseline entry. Establish YOUR baseline on this hardware with `uv run rigor.py run "baseline" --seeds 5 > rigor.log 2>&1` (5 training runs, about 30 minutes). Do NOT use baseline numbers from other platforms. If `rigor_ledger.jsonl` already exists from an earlier run tag, move it aside first so the new baseline isn't compared against old results.
 6. **Confirm and go**: Confirm setup looks good.
 
 Once you get confirmation, kick off the experimentation.
@@ -40,6 +40,8 @@ Each experiment runs on Apple Silicon via MLX. The training script runs for a **
 
 **The first run**: Your very first run should always be to establish the baseline, so you will run the training script as is.
 
+**Keep/discard is decided by `rigor.py`, not by you comparing one number.** A single run is noisy: re-running the same `train.py` moves val_bpb by ~0.03 with a fixed seed, and more across seeds. A single run that happens to beat the best is usually noise. `rigor.py` runs each version on seeds 0–4 (it sets `SEED`, which `train.py` reads), compares it seed by seed against the current best, and prints `KEEP` only when the improvement is real with 95% confidence. Clear losers are discarded after one run. Never keep a change that `rigor.py` discarded, and never override its verdict based on one good-looking run.
+
 ## Output format
 
 Once the script finishes it prints a summary like this:
@@ -59,9 +61,13 @@ depth:            8
 
 Note that the script runs for a fixed 5-minute training budget. On Apple Silicon the throughput, step count, and absolute val_bpb will differ from NVIDIA results — that's expected. Compare only against your own baseline on the same hardware.
 
+`rigor.py` echoes each run's output into `rigor.log` and finishes with a verdict line:
+
 ```
-grep "^val_bpb:" run.log
+KEEP 3f2a91c: mean 2.201234 vs best 2.225335 (delta -0.024101), P(better)=0.97, need >=0.95
 ```
+
+Other verdicts are `BASELINE`, `DISCARD` (not confidently better, or a clear loser after one run), `CRASH` (a run failed or printed no `val_bpb`, including NaN), and `already scored` (this exact `train.py` was tried before).
 
 ## Logging results
 
@@ -74,8 +80,8 @@ commit	val_bpb	memory_gb	status	description
 ```
 
 1. git commit hash (short, 7 chars)
-2. val_bpb achieved (e.g. 1.234567) — use 0.000000 for crashes
-3. peak memory in GB, round to .1f (e.g. 12.3 — divide peak_vram_mb by 1024) — use 0.0 for crashes
+2. val_bpb: the **mean** from the `rigor.py` verdict line (e.g. 1.234567). Use 0.000000 for crashes.
+3. peak memory in GB, rounded to .1f: `grep "^peak_vram_mb:" rigor.log | tail -1`, divided by 1024. Use 0.0 for crashes.
 4. status: `keep`, `discard`, or `crash`
 5. short text description of what this experiment tried
 
@@ -97,19 +103,22 @@ LOOP FOREVER:
 1. Look at the git state: the current branch/commit we're on
 2. Tune `train.py` with an experimental idea by directly hacking the code.
 3. `git add autoresearch-mlx/train.py && git commit -m "experiment: <description>"` (never `git add -A` — this may be inside a larger repo)
-4. Run the experiment: `uv run train.py > run.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
-5. Read out the results: `grep "^val_bpb:\|^peak_vram_mb:" run.log`
-6. If the grep output is empty, the run crashed. Run `tail -n 50 run.log` to read the Python stack trace and attempt a fix. If you can't get things to work after more than a few attempts, give up.
-7. Record the results in the tsv
-8. If val_bpb improved (lower), `git add autoresearch-mlx/results.tsv && git commit --amend --no-edit` to include the log, advancing the branch
-9. If val_bpb is equal or worse, record the discard commit hash, then `git reset --hard <previous kept commit>` to discard it cleanly
+4. Run the experiment through rigor: `uv run rigor.py run "<description>" --seeds 5 > rigor.log 2>&1` (redirect everything — do NOT use tee or let output flood your context)
+5. Read the verdict: `grep -E "^(BASELINE|KEEP|DISCARD|CRASH|already scored)|test:" rigor.log`
+6. On `CRASH`, run `tail -n 50 rigor.log` to read the stack trace. If it's something easy to fix, fix it, amend the commit, and re-run step 4. If you can't get it working after a few attempts, give up on the idea.
+7. On `already scored`, this exact `train.py` was tried before: `git reset --hard HEAD~1` and try a different idea (no tsv row needed).
+8. On `KEEP`: append the row to `results.tsv`, then `git add autoresearch-mlx/results.tsv && git commit --amend --no-edit` so the experiment commit carries its own result, advancing the branch.
+9. On `DISCARD` or a crash you gave up on: note the experiment's commit hash, then `git reset --hard HEAD~1` to drop the experiment commit, and **only then** append the row (with that hash) to `results.tsv` and commit it alone: `git add autoresearch-mlx/results.tsv && git commit -m "log: discard <hash>"`. Writing the row before the reset would lose it, because `results.tsv` is tracked and `reset --hard` reverts it.
+10. After either, `git status --short` must print nothing. If it doesn't, stop and work out what changed before running another experiment.
+
+`rigor_ledger.jsonl` is git-ignored and survives resets. It's rigor's memory of every version it scored, so don't delete or edit it during a run tag. `uv run rigor.py best` and `uv run rigor.py log` show its contents.
 
 The idea is that you are a completely autonomous researcher trying things out. If they work, keep. If they don't, discard. And you're advancing the branch so that you can iterate. If you feel like you're getting stuck in some way, you can rewind but you should probably do this very very sparingly (if ever).
 
-**Timeout**: Each experiment should take ~7 minutes total (5 min training + ~1 min compile/eval overhead on Apple Silicon). If a run exceeds 15 minutes, kill it and treat it as a failure (discard and revert).
+**Timeout**: Each training run takes ~6–7 minutes (5 min training + compile/eval overhead on Apple Silicon). A clear loser stops after 1 run; anything else takes 5 runs, so ~30–35 minutes. If a single run inside `rigor.log` goes past 15 minutes, kill the rigor command and treat it as a crash (discard and revert). Nothing is written to the ledger for a killed run, so it can be retried later.
 
 **Crashes**: If a run crashes (OOM, or a bug, or etc.), use your judgment: If it's something dumb and easy to fix (e.g. a typo, a missing import), fix it and re-run. If the idea itself is fundamentally broken, just skip it, log "crash" as the status in the tsv, and move on.
 
 **NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
 
-As an example use case, a user might leave you running while they sleep. If each experiment takes you ~7 minutes then you can run approx 8-9/hour, for a total of about 70 over the duration of the average human sleep. The user then wakes up to experimental results, all completed by you while they slept!
+As an example use case, a user might leave you running while they sleep. Clear losers take ~7 minutes and promising changes ~30–35, so expect roughly 15–30 experiments over a night. That's fewer than single-run screening, but every `KEEP` is a real improvement rather than noise, so the curve the user wakes up to holds up when re-run.

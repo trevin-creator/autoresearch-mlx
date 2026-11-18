@@ -109,6 +109,10 @@ def download_data(num_shards, download_workers=8):
 
     ok = sum(1 for result in results if result)
     print(f"Data: {ok}/{len(ids)} shards ready at {DATA_DIR}")
+    failed = [index for index, result in zip(ids, results) if not result]
+    if failed:
+        print(f"Data: failed to download shards {failed}. Re-run prepare.py to retry.")
+        sys.exit(1)
 
 
 def list_parquet_files():
@@ -133,6 +137,24 @@ def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
                     return
 
 
+def build_token_bytes(enc, token_bytes_path):
+    """Save each token's true UTF-8 byte length (0 for special tokens) for BPB.
+
+    Uses the token's raw bytes. Decoding a single token to text first is wrong:
+    byte-level tokens that are only part of a multi-byte character decode to
+    U+FFFD and were counted as 3 bytes instead of 1.
+    """
+    print("Tokenizer: building token_bytes lookup...")
+    special_ids = {enc.encode_single_token(name) for name in SPECIAL_TOKENS}
+    token_bytes = np.array(
+        [0 if token_id in special_ids else len(enc.decode_single_token_bytes(token_id))
+         for token_id in range(enc.n_vocab)],
+        dtype=np.int32,
+    )
+    np.save(token_bytes_path, token_bytes)
+    print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
+
+
 def train_tokenizer():
     """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
     tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
@@ -140,6 +162,10 @@ def train_tokenizer():
 
     if os.path.exists(tokenizer_pkl) and os.path.exists(token_bytes_path):
         print(f"Tokenizer: already trained at {TOKENIZER_DIR}")
+        return
+    if os.path.exists(tokenizer_pkl):  # tokenizer present, lookup deleted: rebuild only that
+        with open(tokenizer_pkl, "rb") as handle:
+            build_token_bytes(pickle.load(handle), token_bytes_path)
         return
 
     os.makedirs(TOKENIZER_DIR, exist_ok=True)
@@ -173,18 +199,7 @@ def train_tokenizer():
     t1 = time.time()
     print(f"Tokenizer: trained in {t1 - t0:.1f}s, saved to {tokenizer_pkl}")
 
-    print("Tokenizer: building token_bytes lookup...")
-    special_set = set(SPECIAL_TOKENS)
-    token_bytes_list = []
-    for token_id in range(enc.n_vocab):
-        token_str = enc.decode([token_id])
-        if token_str in special_set:
-            token_bytes_list.append(0)
-        else:
-            token_bytes_list.append(len(token_str.encode("utf-8")))
-    token_bytes = np.array(token_bytes_list, dtype=np.int32)
-    np.save(token_bytes_path, token_bytes)
-    print(f"Tokenizer: saved token_bytes to {token_bytes_path}")
+    build_token_bytes(enc, token_bytes_path)
 
     test = "Hello world! Numbers: 123. Unicode: 你好"
     encoded = enc.encode_ordinary(test)
