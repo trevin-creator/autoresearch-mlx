@@ -29,7 +29,13 @@ program.md ──(instructions)──> AI agent edits train.py
   `TIME_BUDGET = 300` seconds, the dataloader `make_dataloader`, and the scorer
   `evaluate_bpb` that turns a model into a `val_bpb` number.
 - **Writes:** `~/.cache/autoresearch/data/` (parquet shards) and
-  `~/.cache/autoresearch/tokenizer/`.
+  `~/.cache/autoresearch/tokenizer/`. Exits with an error if any shard fails to
+  download. `token_bytes.npy` (each token's byte length, used by `val_bpb`) is
+  rebuilt on its own if you delete it and re-run `prepare.py`. Caches built
+  before the byte-length fix make `val_bpb` read about 0.13% low. Rebuild it
+  (`rm ~/.cache/autoresearch/tokenizer/token_bytes.npy && uv run prepare.py`)
+  and re-run the baseline, because old and new `val_bpb` numbers aren't
+  comparable.
 - **Check it works:**
   ```bash
   uv run prepare.py --num-shards 8
@@ -42,7 +48,8 @@ program.md ──(instructions)──> AI agent edits train.py
 
 ### `train.py`: the experiment (the only file the agent edits)
 - **What it does:** builds a small GPT model in MLX, trains it for 5 minutes of
-  wall-clock time, then scores it with `evaluate_bpb`. Model size, optimizer
+  wall-clock time, then scores it with `evaluate_bpb`. The weight-init seed comes
+  from the `SEED` env var (default 42) and is printed as `seed: N`. Model size, optimizer
   (AdamW), learning rates and batch size are constants near line 367.
 - **Prints at the end** (this is what `rigor.py` reads):
   ```
@@ -84,13 +91,16 @@ program.md ──(instructions)──> AI agent edits train.py
      exact version was already scored, it skips it (never-repeat). Crashed
      versions can be retried.
   2. Runs the command (`--cmd`, default `uv run train.py`) up to `--seeds`
-     times (default 3) and reads each `--metric` from the output.
+     times (default 3), setting `SEED=0, 1, 2, ...` for each run, and reads
+     each `--metric` from the output.
   3. **Early discard:** if the first run is worse than the best by more than
      `--early-margin` (default 3× the best's run-to-run spread), it stops and
      discards without spending more runs.
   4. **Decision:** keep only if P(better on the first metric) ≥ `--confidence`
      (default 0.95) **and** it isn't confidently worse on any other metric
-     (the guardrails).
+     (the guardrails). With 5+ seeds shared with the best it uses a paired
+     sign-flip test (`test: paired`); otherwise the unpaired bootstrap
+     (`test: unpaired`).
   5. Appends the result to the ledger (`--ledger`, default `rigor_ledger.jsonl`).
 - **Commands:**
   ```

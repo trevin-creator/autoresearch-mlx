@@ -102,6 +102,14 @@ A run is discarded after one try only if it's worse than the best by
 `--early-margin` (default: 3× the standard deviation of the best's runs). A
 crash is logged but can be retried.
 
+Seeds: run *i* gets `SEED=i` in its environment (`train.py` reads it; default
+42 when unset), so every config runs on the same seeds 0, 1, 2, ... With
+`--seeds 5` or more, runs pair up by seed and an exact sign-flip test on the
+per-seed differences decides, which cancels seed-to-seed variance and catches
+smaller real improvements. With the default 3 seeds it uses the unpaired
+bootstrap, because 3 paired seeds can't honestly show 95% confidence. For other
+experiments, read `SEED` (or name another variable with `--seed-env`).
+
 ## Differences from upstream
 
 - **MLX instead of PyTorch/CUDA.** Native Apple Silicon training with unified memory.
