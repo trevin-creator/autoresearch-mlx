@@ -88,10 +88,11 @@ def prob_improvement(best, cand, trials=20000):
     return wins / trials
 
 
-def score(desc, seeds, confidence):
+def score(desc, seeds, confidence, early_margin):
     ledger = load_ledger()
     h = train_hash()
-    prior = next((e for e in ledger if e["hash"] == h), None)
+    # crashes may be transient (OOM, killed process), so they don't block a retry
+    prior = next((e for e in ledger if e["hash"] == h and e["status"] != "crash"), None)
     if prior:
         print(f"already scored {h}: {prior['status']} (mean {prior['mean']:.6f}) — {prior['desc']}")
         print("skipping (never-repeat). change train.py to try something new.")
@@ -107,9 +108,11 @@ def score(desc, seeds, confidence):
             return
         samples.append(v)
         print(f"  seed {i + 1}/{seeds}: val_bpb {v:.6f}")
-        if best and i == 0 and v >= best["mean"]:  # clear loser, don't spend more seeds
+        # clear loser: worse than best by more than run-to-run noise, don't spend more seeds
+        if best and i == 0 and seeds > 1 and v >= best["mean"] + early_margin:
             record(h, desc, samples, "discard", 0.0)
-            print(f"\nDISCARD {h}: first run {v:.6f} >= best mean {best['mean']:.6f}.")
+            print(f"\nDISCARD {h}: first run {v:.6f} >= best mean {best['mean']:.6f} "
+                  f"+ margin {early_margin:.4f}.")
             return
 
     if best is None:  # first config is the baseline
@@ -133,12 +136,15 @@ def main():
     r.add_argument("desc", help="short description of the change")
     r.add_argument("--seeds", type=int, default=3, help="training runs to average (default 3)")
     r.add_argument("--confidence", type=float, default=0.95, help="P(better) needed to keep (default 0.95)")
+    r.add_argument("--early-margin", type=float, default=0.03,
+                   help="discard after one run only if it's worse than best by this much "
+                        "(default 0.03, ~run-to-run noise; tune per machine)")
     sub.add_parser("best", help="show the current best config")
     sub.add_parser("log", help="show every scored config")
     a = ap.parse_args()
 
     if a.cmd == "run":
-        score(a.desc, a.seeds, a.confidence)
+        score(a.desc, a.seeds, a.confidence, a.early_margin)
     elif a.cmd == "best":
         b = best_entry(load_ledger())
         print(f"best {b['hash']}: {b['mean']:.6f} +/- {b['std']:.6f} — {b['desc']}" if b else "no baseline yet.")
