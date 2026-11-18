@@ -21,7 +21,7 @@ def run(study, code, results, margin=0.03, seeds=3):
     study.files[0].write_text(code)
     name = study.primary.name
     it = iter(r if r is None or isinstance(r, dict) else {name: r} for r in results)
-    rigor.run_once = lambda _study: next(it)
+    rigor.run_once = lambda _study, _seed=None: next(it)
     rigor.score(study, "t", seeds, 0.95, margin)
     return rigor.load_ledger(study)[-1]
 
@@ -92,6 +92,31 @@ def check_old_ledger_best_without_guardrail_samples():
     assert run(s, "a", better)["status"] == "keep"  # guardrail skipped, primary decides
 
 
+def check_sign_flip():
+    # n consistent improvements: best possible confidence is 1 - 1/2^n, never more
+    assert rigor.sign_flip_p_better([-1, -2, -3]) == 1 - 1 / 8
+    assert rigor.sign_flip_p_better([-1, -2, -3, -4, -5]) == 1 - 1 / 32
+    assert rigor.sign_flip_p_better([0, 0, 0, 0, 0]) == 0  # no difference: no evidence
+    assert rigor.sign_flip_p_better([1, 2, 3, 4, 5]) == 0  # consistently worse
+
+
+def check_paired_cancels_seed_variance():
+    # big seed-to-seed spread, small but consistent improvement on every seed
+    s = make_study()
+    seed_effect = [1.0, 1.2, 1.4, 1.6, 1.8]
+    run(s, "a", seed_effect, seeds=5)
+    e = run(s, "b", [x - 0.01 for x in seed_effect], seeds=5, margin=None)
+    assert e["seeds"] == [0, 1, 2, 3, 4] and e["status"] == "keep", e  # paired sees it
+    # unpaired would not: the spread swamps a 0.01 shift
+    assert rigor.prob_improvement(seed_effect, [x - 0.01 for x in seed_effect]) < 0.95
+
+
+def check_seed_reaches_command():
+    s = rigor.Study(cmd=[sys.executable, "-c", "import os; print('m:', os.environ['SEED'])"],
+                    metrics=[Metric("m")], files=[], ledger=Path("unused"))
+    assert REAL_RUN_ONCE(s, 7) == {"m": 7.0}
+
+
 def check_parse():
     out = "step 1\nloss: 3.2\nloss = 2.5e-1\nval_loss: 9\n"
     assert rigor.parse_metric(out, "loss") == 0.25  # last match wins
@@ -107,5 +132,8 @@ if __name__ == "__main__":
     check_auto_margin_needs_noise()
     check_guardrails()
     check_old_ledger_best_without_guardrail_samples()
+    check_sign_flip()
+    check_paired_cancels_seed_variance()
+    check_seed_reaches_command()
     check_parse()
     print("ok")

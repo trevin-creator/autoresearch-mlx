@@ -397,7 +397,9 @@ def get_lr_multiplier(progress):
 
 
 t_start = time.time()
-mx.random.seed(42)
+SEED = int(os.environ.get("SEED", 42))  # rigor.py sets a distinct SEED per repeat
+mx.random.seed(SEED)
+print(f"seed: {SEED}")
 
 tokenizer = Tokenizer.from_directory()
 vocab_size = tokenizer.get_vocab_size()
@@ -449,7 +451,7 @@ t_compiled = None
 while True:
     t0 = time.time()
     accum_grads = None
-    train_loss = None
+    train_loss_sum = 0.0
 
     for _ in range(grad_accum_steps):
         loss, grads = loss_grad_fn(model, x, y)
@@ -457,7 +459,7 @@ while True:
         if t_compiled is None:
             t_compiled = time.time()
             print(f"Model compiled in {t_compiled - t_data:.1f}s")
-        train_loss = loss
+        train_loss_sum += loss.item()  # already evaluated above, so no extra sync
         if accum_grads is None:
             accum_grads = grads
         else:
@@ -473,7 +475,7 @@ while True:
     optimizer.update(model, accum_grads)
     mx.eval(model.parameters(), *optimizer.state)
 
-    train_loss_f = float(train_loss.item())
+    train_loss_f = train_loss_sum / grad_accum_steps  # mean over microbatches, not just the last
     if train_loss_f > 100:
         print("FAIL")
         raise SystemExit(1)

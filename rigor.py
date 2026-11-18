@@ -30,6 +30,14 @@ subcommand; use a separate ledger per study:
         --metric p99_latency --metric memory_mb \\
         --files bench.py kernel.c --ledger bench_ledger.jsonl run "unroll loop"
 
+Run i gets seed i through the SEED env var (--seed-env), so every config is run
+on the same seeds 0..n-1. With at least 5 seeds shared with the best
+(--seeds 5), runs pair up by seed and an exact sign-flip test on the per-seed
+differences decides, which cancels seed-to-seed variance. With fewer (the
+default 3) or older ledger entries without seeds, it uses the unpaired
+bootstrap. Three paired seeds can never show 95% confidence honestly (the
+best possible is 1 - 1/8).
+
 Paths and the command are relative to the current directory. Nothing here
 edits the watched files, touches git, or changes how a metric is computed —
 it only decides.
@@ -37,7 +45,9 @@ it only decides.
 
 import argparse
 import hashlib
+import itertools
 import json
+import os
 import random
 import re
 import shlex
@@ -49,6 +59,7 @@ from pathlib import Path
 
 NUMBER = r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
 AUTO_MARGIN_STDS = 3  # auto early-discard margin = this many stdevs of the best's runs
+MIN_PAIRED_SEEDS = 5  # fewest shared seeds for the paired test (max confidence 1 - 1/2^5 = 0.97)
 
 
 @dataclass(frozen=True)
@@ -67,6 +78,7 @@ class Study:
     metrics: list  # metrics[0] decides keep/discard; the rest are guardrails
     files: list  # paths whose contents identify a config
     ledger: Path
+    seed_env: str = "SEED"  # env var holding the run's seed ("" = don't set one)
 
     @property
     def primary(self):
@@ -92,9 +104,12 @@ def parse_metric(output, metric):
     return float(found[-1]) if found else None
 
 
-def run_once(study):
+def run_once(study, seed=None):
     """Run the experiment once, echo it live, return {metric: value} (None on crash)."""
-    proc = subprocess.Popen(study.cmd, text=True,
+    env = dict(os.environ)
+    if study.seed_env and seed is not None:
+        env[study.seed_env] = str(seed)
+    proc = subprocess.Popen(study.cmd, text=True, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     out = []
     for line in proc.stdout:
@@ -114,10 +129,10 @@ def load_ledger(study):
     return [json.loads(x) for x in study.ledger.read_text().splitlines() if x.strip()]
 
 
-def record(study, h, desc, samples, status, p, regressed=()):
-    """samples: {metric: [values]}. Primary stays in samples/mean/std (old ledger format)."""
+def record(study, h, desc, samples, seeds, status, p, regressed=()):
+    """samples: {metric: [values]}, seeds[i] is run i's seed. Primary stays in samples/mean/std."""
     prim = samples.get(study.primary.name, [])
-    entry = {"hash": h, "desc": desc, "samples": prim,
+    entry = {"hash": h, "desc": desc, "samples": prim, "seeds": list(seeds),
              "mean": statistics.mean(prim) if prim else 0.0,
              "std": statistics.pstdev(prim) if len(prim) > 1 else 0.0,
              "status": status, "p_better": round(p, 4)}
@@ -148,11 +163,35 @@ def prob_improvement(best, cand, trials=20000):
     return wins / trials
 
 
-def p_better(metric, best_vals, cand_vals):
-    return prob_improvement([metric.key(x) for x in best_vals], [metric.key(x) for x in cand_vals])
+def sign_flip_p_better(diffs):
+    """Exact paired sign-flip test on per-seed differences (negative = candidate better).
+    Returns 1 - p, where p = share of the 2^n sign flips whose mean is <= the observed one.
+    With n pairs it can't exceed 1 - 1/2^n, so it never overstates what few seeds show."""
+    # ponytail: enumerates all 2^n flips; fine for n <= ~16 seeds, sample flips beyond that
+    obs = sum(diffs)
+    tol = 1e-12 * max(1.0, *(abs(d) for d in diffs))
+    flips = itertools.product((1, -1), repeat=len(diffs))
+    as_good = sum(sum(s * d for s, d in zip(f, diffs)) <= obs + tol for f in flips)
+    return 1 - as_good / 2 ** len(diffs)
 
 
-def regressions(study, best, samples, confidence):
+def paired_diffs(best_vals, best_seeds, cand_vals, cand_seeds):
+    """cand - best at each seed both ran."""
+    by_seed = dict(zip(best_seeds or [], best_vals))
+    return [c - by_seed[s] for s, c in zip(cand_seeds or [], cand_vals) if s in by_seed]
+
+
+def p_better(metric, best_vals, cand_vals, best_seeds=None, cand_seeds=None):
+    """(P(cand better than best), test used). Paired sign-flip test on shared seeds when
+    there are enough of them (cancels seed-to-seed variance); otherwise unpaired bootstrap."""
+    k = metric.key
+    diffs = paired_diffs([k(x) for x in best_vals], best_seeds, [k(x) for x in cand_vals], cand_seeds)
+    if len(diffs) >= MIN_PAIRED_SEEDS:
+        return sign_flip_p_better(diffs), "paired"
+    return prob_improvement([k(x) for x in best_vals], [k(x) for x in cand_vals]), "unpaired"
+
+
+def regressions(study, best, samples, seeds, confidence):
     """Guardrail metrics the candidate is confidently worse on than the best."""
     bad = []
     for m in study.metrics[1:]:
@@ -161,7 +200,7 @@ def regressions(study, best, samples, confidence):
             print(f"  guardrail {m.name}: best has no samples, not checked")
             continue
         # P(candidate worse) = P(best better than candidate)
-        p_worse = p_better(m, samples[m.name], ref)
+        p_worse, _ = p_better(m, samples[m.name], ref, seeds, best.get("seeds"))
         print(f"  guardrail {m.name}: {statistics.mean(samples[m.name]):.6g} vs best "
               f"{statistics.mean(ref):.6g}, P(worse)={p_worse:.2f}")
         if p_worse >= confidence:
@@ -183,27 +222,30 @@ def is_clear_loser(study, best, v, margin):
 
 
 def collect(study, h, desc, seeds, best, margin):
-    """Run up to `seeds` times. Returns samples, or None if it already logged a crash/early discard."""
+    """Run `seeds` times with seeds 0..seeds-1 (the same for every config, so runs pair up).
+    Returns (samples, seeds_used), or None if it already logged a crash/early discard."""
     pname = study.primary.name
     samples = {m.name: [] for m in study.metrics}
+    used = []
     for i in range(seeds):
-        vals = run_once(study)
+        vals = run_once(study, i)
         if vals is None:
-            record(study, h, desc, samples, "crash", 0.0)
+            record(study, h, desc, samples, used, "crash", 0.0)
             names = ", ".join(m.name for m in study.metrics)
             print(f"\nCRASH {h}: run failed or didn't print every metric ({names}) — logged.")
             return None
         for name, v in vals.items():
             samples[name].append(v)
+        used.append(i)
         v = vals[pname]
-        print(f"  run {i + 1}/{seeds}: " + "  ".join(f"{k} {x:.6g}" for k, x in vals.items()))
+        print(f"  run {i + 1}/{seeds} (seed {i}): " + "  ".join(f"{k} {x:.6g}" for k, x in vals.items()))
         # clear loser: worse than best by more than run-to-run noise, don't spend more runs
         if best and i == 0 and seeds > 1 and is_clear_loser(study, best, v, margin):
-            record(study, h, desc, samples, "discard", 0.0)
+            record(study, h, desc, samples, used, "discard", 0.0)
             print(f"\nDISCARD {h}: first run {v:.6f} worse than best mean "
                   f"{best['mean']:.6f} by more than margin {margin:.6g}.")
             return None
-    return samples
+    return samples, used
 
 
 def score(study, desc, seeds, confidence, early_margin=None):
@@ -218,19 +260,23 @@ def score(study, desc, seeds, confidence, early_margin=None):
 
     best = best_entry(study, ledger)
     margin = early_margin_for(best, early_margin) if best else None
-    samples = collect(study, h, desc, seeds, best, margin)
-    if samples is None:
+    got = collect(study, h, desc, seeds, best, margin)
+    if got is None:
         return
+    samples, used = got
 
     if best is None:  # first config is the baseline
-        e = record(study, h, desc, samples, "keep", 1.0)
+        e = record(study, h, desc, samples, used, "keep", 1.0)
         print(f"\nBASELINE {h}: {e['mean']:.6f} +/- {e['std']:.6f} ({seeds} runs)")
         return
 
-    p = p_better(study.primary, best["samples"], samples[study.primary.name])
-    bad = regressions(study, best, samples, confidence)
+    p, test = p_better(study.primary, best["samples"], samples[study.primary.name],
+                       best.get("seeds"), used)
+    print(f"  test: {test}" + ("" if test == "paired" else
+          f" (paired needs >= {MIN_PAIRED_SEEDS} seeds shared with the best; use --seeds 5)"))
+    bad = regressions(study, best, samples, used, confidence)
     status = "keep" if p >= confidence and not bad else "discard"
-    e = record(study, h, desc, samples, status, p, bad)
+    e = record(study, h, desc, samples, used, status, p, bad)
     print(f"\n{status.upper()} {h}: mean {e['mean']:.6f} vs best {best['mean']:.6f} "
           f"(delta {e['mean'] - best['mean']:+.6f}), P(better)={p:.2f}, need >={confidence:.2f}"
           + (f"; worse on {', '.join(bad)}" if bad else ""))
@@ -246,6 +292,8 @@ def parse_args(argv=None):
     ap.add_argument("--files", nargs="+", default=["train.py"],
                     help="files whose contents identify a config (default train.py)")
     ap.add_argument("--ledger", default="rigor_ledger.jsonl", help="ledger path (one per study)")
+    ap.add_argument("--seed-env", default="SEED",
+                    help="env var set to the run's seed (0, 1, 2, ...); '' to not set one (default SEED)")
     sub = ap.add_subparsers(dest="sub", required=True)
     r = sub.add_parser("run", help="score the current config against the best")
     r.add_argument("desc", help="short description of the change")
@@ -266,7 +314,7 @@ def fmt_extra(e):
 def main():
     a = parse_args()
     study = Study(cmd=shlex.split(a.cmd), metrics=a.metrics or [Metric("val_bpb")],
-                  files=[Path(f) for f in a.files], ledger=Path(a.ledger))
+                  files=[Path(f) for f in a.files], ledger=Path(a.ledger), seed_env=a.seed_env)
     if a.sub == "run":
         score(study, a.desc, a.seeds, a.confidence, a.early_margin)
     elif a.sub == "best":
